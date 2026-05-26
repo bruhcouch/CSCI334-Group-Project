@@ -14,11 +14,11 @@ public class OccupancyService {
     }
     
     public int calculateCurrentOccupancy(String lotId) {
-    	todo;
+    	return this.occupancyRepository.findCurrentByLotId(lotId).occupiedSpaces();
     }
     
     public auto analyseHistory(String lotId) {
-    	todo;
+    	return this.occupancyRepository.findHistoryByLotId(lotId);
     }
     
     public double predictFutureOccupancy(String lotId, Instant time) {
