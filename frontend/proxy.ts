@@ -3,15 +3,15 @@ import type { NextRequest } from "next/server";
 
 export function proxy(req: NextRequest) {
     const jwt = req.cookies.get("jwt")?.value;
-
     const path = req.nextUrl.pathname;
 
-    if ((path === "/" || !jwt)
-        || (path.startsWith("/staff") || path.startsWith("/user")) && !jwt
-    ) {
-        return NextResponse.redirect(new URL("/login", req.url));
+    if (path === "/") {
+        return NextResponse.redirect(new URL(jwt ? "/user" : "/login", req.url));
     }
 
+    if ((path.startsWith("/staff") || path.startsWith("/user")) && !jwt) {
+        return NextResponse.redirect(new URL("/login", req.url));
+    }
 
     return NextResponse.next();
 }

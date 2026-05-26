@@ -29,6 +29,10 @@ public class AccountUserDetailsService implements UserDetailsService {
         return new User(
                 account.getEmail(),
                 account.getPassword(),
+                account.isEnabled(),
+                true,
+                true,
+                true,
                 List.of(new SimpleGrantedAuthority("ROLE_" + account.getRole().name()))
         );
     }

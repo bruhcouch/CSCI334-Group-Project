@@ -9,5 +9,5 @@ import com.example.spotter.model.DetectionEvent;
 
 @Repository
 public interface DetectionEventRepository extends JpaRepository<DetectionEvent, Long> {
-    List<DetectionEvent> findTop100ByOrderByDetectedAtDesc();
+    List<DetectionEvent> findAllByOrderByDetectedAtDesc();
 }

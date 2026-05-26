@@ -18,6 +18,7 @@ public class Parking {
     private String parkingLot;
     private String parkingSpace;
     private String vehicle;
+    private String mobilityParkingPermitNumber;
     private LocalDateTime startTime;
     private LocalDateTime endTime;
     private Double cost;
@@ -59,6 +60,10 @@ public class Parking {
         return vehicle;
     }
 
+    public String getMobilityParkingPermitNumber() {
+        return mobilityParkingPermitNumber;
+    }
+
     public LocalDateTime getStartTime() {
         return startTime;
     }
@@ -93,6 +98,10 @@ public class Parking {
 
     public void setVehicle(String vehicle) {
         this.vehicle = vehicle;
+    }
+
+    public void setMobilityParkingPermitNumber(String mobilityParkingPermitNumber) {
+        this.mobilityParkingPermitNumber = mobilityParkingPermitNumber;
     }
 
     public void setStartTime(LocalDateTime startTime) {

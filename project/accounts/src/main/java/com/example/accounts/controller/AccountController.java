@@ -21,6 +21,7 @@ import com.example.accounts.dto.response.AccountResponse;
 import com.example.accounts.dto.response.AuthResponse;
 import com.example.accounts.dto.response.RegisterResponse;
 import com.example.accounts.service.AccountService;
+import com.example.accounts.util.Role;
 
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -33,8 +34,6 @@ public class AccountController {
     public AccountController(AccountService accountService) {
         this.accountService = accountService;
     }
-
-    // Creating account (registration) and authentication (login)
 
     @PostMapping("/register")
     public ResponseEntity<RegisterResponse> register(@RequestBody RegisterRequest registerRequest, HttpServletResponse response) {
@@ -58,6 +57,22 @@ public class AccountController {
         return ResponseEntity
             .status(HttpStatus.CREATED)
             .header("Set-Cookie", cookie.toString())
+            .body(registerResponse);
+    }
+
+    @PostMapping("/register/staff")
+    public ResponseEntity<RegisterResponse> registerStaff(@RequestBody RegisterRequest registerRequest) {
+        RegisterResult registerResult = accountService.register(registerRequest, Role.STAFF, false);
+
+        RegisterResponse registerResponse = new RegisterResponse(
+            registerResult.getId(),
+            registerResult.getUsername(),
+            registerResult.getEmail(),
+            registerResult.getCreatedAt(),
+            "Staff account submitted for approval");
+
+        return ResponseEntity
+            .status(HttpStatus.CREATED)
             .body(registerResponse);
     }
 
@@ -85,8 +100,6 @@ public class AccountController {
             .body(authResponse);
     }
 
-    // Reading their own account details
-
     @GetMapping()
     public ResponseEntity<AccountResponse> getAccount() {
 
@@ -98,8 +111,6 @@ public class AccountController {
 
     }
 
-    // Updating their account details
-
     @PatchMapping()
     public ResponseEntity<Void> update(@RequestBody UpdateRequest updateRequest) {
 
@@ -109,8 +120,6 @@ public class AccountController {
         accountService.update(updateRequest, email);
         return new ResponseEntity<>(HttpStatus.NO_CONTENT);
     }
-
-    // updating subscription
 
     @PatchMapping("/subscription/upgrade")
     public ResponseEntity<Void> upgradeSubscription() {

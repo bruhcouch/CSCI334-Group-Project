@@ -76,19 +76,10 @@ public class SpotterService {
 		return getSummary(lotName, null).getZones();
 	}
 	
-	/**
-	 * Returns whether a space is occupied.
-	 * @param spaceId Which space to determine the occupancy of.
-	 * @return Whether space {@value spaceId} is taken, or `empty` if the space does not exist.
-	 */
     public Optional<Boolean> isOccupied(int spaceId) {
     	return _repository.findById((long) spaceId).map((space) -> space.isOccupied());
     }
     
-    /**
-     * Responds to a sensor activation for a spot. Does nothing if the spot does not exist.
-     * @param spaceId
-     */
     public void handleSensorActivation(int spaceId) {
     	_repository.findById((long) spaceId).ifPresent((space) -> {
 			DetectionRequest request = new DetectionRequest();
@@ -186,8 +177,10 @@ public class SpotterService {
 
 	@Transactional
 	public SimulationRunResponse resetSimulation() {
-		detectionEventRepository.deleteAll();
-		_repository.deleteAll();
+		detectionEventRepository.deleteAllInBatch();
+		detectionEventRepository.flush();
+		_repository.deleteAllInBatch();
+		_repository.flush();
 		List<Space> spaces = _repository.saveAll(datasetService.loadSpaces());
 		spaces.stream()
 				.map(SpaceCreatedEvent::new)
@@ -225,7 +218,8 @@ public class SpotterService {
 	}
 
 	public List<DetectionEventResponse> getRecentEvents() {
-		return detectionEventRepository.findTop100ByOrderByDetectedAtDesc().stream()
+		return detectionEventRepository.findAllByOrderByDetectedAtDesc().stream()
+				.limit(100)
 				.map(DetectionEventResponse::new)
 				.toList();
 	}
@@ -238,7 +232,7 @@ public class SpotterService {
 				record.isOccupied(),
 				record.getConfidence(),
 				record.getSource(),
-				record.getObservedAt(),
+				Instant.now(),
 				publishEvent);
 		SpaceResponse response = getSpace(space.getId());
 		return new SimulationEventResponse(record.getSequenceNumber(), response, event);

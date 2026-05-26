@@ -7,7 +7,6 @@ import org.springframework.stereotype.Repository;
 
 import com.example.adminstats.model.Snapshot;
 
-// singleton object
 @Repository
 public interface AdminRepository extends JpaRepository<Snapshot, LocalDate>{
     Snapshot findSnapshotByDate(LocalDate date);

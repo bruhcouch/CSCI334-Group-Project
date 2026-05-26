@@ -6,7 +6,6 @@ import com.example.adminstats.model.DTO.OccupancySnapshotDTO;
 import com.example.adminstats.model.DTO.PeakHourSnapshotDTO;
 import com.example.adminstats.model.DTO.UtilisationSnapshotDTO;
 
-// composite object
 public class Summary {
     private LocalDate date;
     private OccupancySnapshotDTO occupancy_snap;

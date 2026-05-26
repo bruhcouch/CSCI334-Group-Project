@@ -32,10 +32,9 @@ public class AdminSeeder implements CommandLineRunner {
     @Override
     public void run(String... args) {
 
-        // Create admin if he doesn't exist
         if (!accountRepository.existsByEmail(adminEmail)) {
             RegisterRequest adminAccount = new RegisterRequest(adminUsername, adminEmail, adminPassword);
-            accountAdminService.registerAdmin(adminAccount);
+            accountAdminService.registerInitialAdmin(adminAccount);
         }
     }
 

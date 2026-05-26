@@ -2,6 +2,8 @@ package com.example.parking.dto.response;
 
 import java.time.LocalDateTime;
 
+import com.example.parking.model.Parking;
+
 public class ParkingResponse {
 
     private Long id;
@@ -14,6 +16,8 @@ public class ParkingResponse {
 
     private String vehicle;
 
+    private String mobilityParkingPermitNumber;
+
     private LocalDateTime startTime;
 
     private LocalDateTime endTime;
@@ -23,6 +27,22 @@ public class ParkingResponse {
     private String status;
 
     private LocalDateTime createdAt;
+
+    public ParkingResponse() {}
+
+    public ParkingResponse(Parking parking) {
+        this.id = parking.getId();
+        this.accountId = parking.getAccountId();
+        this.parkingLot = parking.getParkingLot();
+        this.parkingSpace = parking.getParkingSpace();
+        this.vehicle = parking.getVehicle();
+        this.mobilityParkingPermitNumber = parking.getMobilityParkingPermitNumber();
+        this.startTime = parking.getStartTime();
+        this.endTime = parking.getEndTime();
+        this.cost = parking.getCost();
+        this.status = parking.getStatus();
+        this.createdAt = parking.getCreatedAt();
+    }
 
     public Long getId() {
         return id;
@@ -62,6 +82,14 @@ public class ParkingResponse {
 
     public void setVehicle(String vehicle) {
         this.vehicle = vehicle;
+    }
+
+    public String getMobilityParkingPermitNumber() {
+        return mobilityParkingPermitNumber;
+    }
+
+    public void setMobilityParkingPermitNumber(String mobilityParkingPermitNumber) {
+        this.mobilityParkingPermitNumber = mobilityParkingPermitNumber;
     }
 
     public LocalDateTime getStartTime() {
