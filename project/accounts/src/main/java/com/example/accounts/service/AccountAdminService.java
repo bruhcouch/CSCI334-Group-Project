@@ -31,8 +31,6 @@ public class AccountAdminService {
         this.accountProducerService = accountProducerService;
     }
 
-    // Create
-
     public RegisterResult registerAdmin(RegisterRequest registerRequest) {
         RegisterResult registerResult = accountService.register(registerRequest, Role.ADMIN, false);
         return registerResult;
@@ -47,8 +45,6 @@ public class AccountAdminService {
         RegisterResult registerResult = accountService.register(registerRequest, Role.STAFF);
         return registerResult;
     }
-
-    // Read
 
     private Account getAccount(Long accountId) {
         return accountRepository.findById(accountId)
@@ -66,8 +62,6 @@ public class AccountAdminService {
             .toList();
     }
 
-    // Update
-
     private void updateAccountEnabledStatus(Long accountId, boolean enabled) {
         Account account = getAccount(accountId);
         account.setEnabled(enabled);
@@ -84,8 +78,6 @@ public class AccountAdminService {
         updateAccountEnabledStatus(accountId, false);
     }
 
-
-    // Delete
 
     public void deleteAccount(Long accountId) {
         accountRepository.deleteById(accountId);

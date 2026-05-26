@@ -2,7 +2,6 @@ package com.example.adminstats.bootstrap;
 
 import java.time.LocalDate;
 import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
@@ -33,8 +32,6 @@ public class AdminStatsSeeder implements CommandLineRunner {
         this.adminRepository = adminRepository;
     }
 
-    // generates the comma-seperated occupancyPerHour variable for snapshotDTO
-    // follows a multimodal distribution (3 gaussian combined) to simulate the activity of a real car park with busy times
     private String generateOccupancy(int totalSpots) {
         int[] occupancy = new int[24];
         Random random = new Random();
@@ -58,7 +55,6 @@ public class AdminStatsSeeder implements CommandLineRunner {
 
     public void run(String... args){
 
-        // Creates a auto-sorting list of dates that will igonore duplicates
         Set<LocalDate> dateSet = new TreeSet<>();
 
         while (dateSet.size() < NUMBER_OF_ENTRIES) {
@@ -69,28 +65,15 @@ public class AdminStatsSeeder implements CommandLineRunner {
             dateSet.add(date);
         }
 
-        // Convert Set to List to loop
         List<LocalDate> dates = new ArrayList<>(dateSet);
-        // int counter = 0;
 
         for (LocalDate date : dates) {
             Snapshot snapshot = new Snapshot();
             snapshot.setLotId(1);
             snapshot.setDate(date);
-            snapshot.setOccupancy(generateOccupancy(250));
-            snapshot.setSpotsTotal(250);
+            snapshot.setOccupancy(generateOccupancy(100));
+            snapshot.setSpotsTotal(100);
             adminRepository.save(snapshot);
-            /* counter++;
-            if(counter == (dates.size())-1){
-                // most recent entry will have missing values for occupancy
-                SnapshotDTO last_snapshot = new SnapshotDTO();
-                snapshot.setLotId(1);
-                String str_date = date.format(DateTimeFormatter.ofPattern("YYYY/MM/DD")); // LocalDate -> String (for storage)
-                snapshot.setDate(str_date);
-                snapshot.setOccupancy(null);
-                snapshot.setSpotsTotal(500);
-                adminRepository.save(snapshot);
-            } */
         }
     }
 }

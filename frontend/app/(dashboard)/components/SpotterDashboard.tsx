@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { fetcher, spotterFetcher } from "../../../lib/api";
 
 type DashboardMode = "user" | "staff";
@@ -89,6 +89,45 @@ type AccountStats = {
     premium: number;
 };
 
+type ParkingBooking = {
+    id: number;
+    accountId: number;
+    parkingLot: string;
+    parkingSpace: string;
+    vehicle: string;
+    mobilityParkingPermitNumber?: string | null;
+    startTime: string;
+    endTime: string;
+    cost: number;
+    status: "RESERVED" | "ACTIVE" | "EXPIRED" | "CANCELLED" | "COMPLETED";
+    createdAt: string;
+};
+
+type OccupancyPrediction = {
+    lotId: string;
+    predictedOccupancyRate: number;
+    availabilityProbability: number;
+    estimatedAvailableSpaces: number;
+    totalSpaces: number;
+    targetTime: string;
+};
+
+type AdminSummary = {
+    date: string;
+    occupancySnapshot?: {
+        hour: number;
+        spotsTaken: number;
+        spotsTotal: number;
+    };
+    peakHourSnapshot?: {
+        hour: number;
+        occupancyRate: number;
+    };
+    utilisationSnapshot?: {
+        utilisationRate: number;
+    };
+};
+
 function toQuery(params: URLSearchParams) {
     const query = params.toString();
     return query ? `?${query}` : "";
@@ -131,8 +170,29 @@ function formatDateTime(value?: string | null) {
     }).format(date);
 }
 
+function toDateTimeInput(date: Date) {
+    const pad = (value: number) => String(value).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function defaultBookingStart() {
+    const start = new Date(Date.now() + 15 * 60 * 1000);
+    start.setSeconds(0, 0);
+    return toDateTimeInput(start);
+}
+
+function defaultBookingEnd() {
+    const end = new Date(Date.now() + 75 * 60 * 1000);
+    end.setSeconds(0, 0);
+    return toDateTimeInput(end);
+}
+
 function percent(value: number) {
     return `${Math.round(value)}%`;
+}
+
+function probability(value: number) {
+    return `${Math.round(value * 100)}%`;
 }
 
 function metricValue(value: number | undefined) {
@@ -157,6 +217,49 @@ function accountStats(accounts: Account[]): AccountStats {
     };
 }
 
+function distanceMeters(space: Space) {
+    if (typeof space.latitude !== "number" || typeof space.longitude !== "number") {
+        return Number.POSITIVE_INFINITY;
+    }
+
+    const campusLat = -34.4068;
+    const campusLng = 150.8793;
+    const earthRadius = 6371000;
+    const toRadians = (value: number) => value * Math.PI / 180;
+    const dLat = toRadians(space.latitude - campusLat);
+    const dLng = toRadians(space.longitude - campusLng);
+    const lat1 = toRadians(campusLat);
+    const lat2 = toRadians(space.latitude);
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+    return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function formatDistance(value: number) {
+    if (!Number.isFinite(value)) {
+        return "Campus distance unavailable";
+    }
+
+    return value < 1000 ? `${Math.round(value)}m from campus centre` : `${(value / 1000).toFixed(1)}km from campus centre`;
+}
+
+function bayTypeLabel(value: string) {
+    return value === "Accessible" ? "Accessible" : "General";
+}
+
+function zoneName(value: string) {
+    return value === "Accessible" ? "Accessible bays" : "General bays";
+}
+
+function bookingBayLabel(booking: ParkingBooking) {
+    const parts = booking.parkingSpace.split("-");
+    if (parts.length >= 4) {
+        const type = parts[2] === "ACC" ? "Accessible" : "Bay";
+        return `${booking.parkingLot} ${type} ${parts[3]}`;
+    }
+
+    return booking.parkingLot;
+}
+
 function clearJwtCookie() {
     document.cookie = "jwt=; Max-Age=0; path=/; SameSite=Lax";
 }
@@ -175,6 +278,7 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
     const [events, setEvents] = useState<DetectionEvent[]>([]);
     const [selectedLot, setSelectedLot] = useState("all");
     const [selectedZone, setSelectedZone] = useState("all");
+    const [accessibleEligible, setAccessibleEligible] = useState(false);
     const [lastSync, setLastSync] = useState<Date | null>(null);
     const [spotterError, setSpotterError] = useState<string | null>(null);
     const [account, setAccount] = useState<Account | null>(null);
@@ -184,9 +288,22 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
     const [actionEvents, setActionEvents] = useState<DetectionEvent[]>([]);
     const [actionBusy, setActionBusy] = useState<string | null>(null);
     const [approvalBusyId, setApprovalBusyId] = useState<number | null>(null);
+    const [approvalBusyAction, setApprovalBusyAction] = useState<"approve" | "reject" | null>(null);
     const [approvalStatus, setApprovalStatus] = useState<string | null>(null);
     const [selectedSensor, setSelectedSensor] = useState("");
     const [manualOccupied, setManualOccupied] = useState("true");
+    const [bookings, setBookings] = useState<ParkingBooking[]>([]);
+    const [bookingSensor, setBookingSensor] = useState("");
+    const [bookingRegistration, setBookingRegistration] = useState("");
+    const [bookingPermitNumber, setBookingPermitNumber] = useState("");
+    const [bookingStart, setBookingStart] = useState(defaultBookingStart);
+    const [bookingEnd, setBookingEnd] = useState(defaultBookingEnd);
+    const [bookingBusy, setBookingBusy] = useState<string | null>(null);
+    const [bookingStatus, setBookingStatus] = useState<string | null>(null);
+    const [bookingError, setBookingError] = useState<string | null>(null);
+    const [predictions, setPredictions] = useState<OccupancyPrediction[]>([]);
+    const [predictionError, setPredictionError] = useState<string | null>(null);
+    const [adminSummary, setAdminSummary] = useState<AdminSummary | null>(null);
 
     const loadSpotter = useCallback(async () => {
         try {
@@ -224,7 +341,7 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
             setLastSync(new Date());
             setSpotterError(null);
         } catch (error) {
-            setSpotterError(error instanceof Error ? error.message : "Spotter service is unavailable");
+            setSpotterError(error instanceof Error ? error.message : "Parking availability is unavailable");
         }
     }, [isStaff, selectedLot, selectedZone]);
 
@@ -281,12 +398,61 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
         };
     }, [isStaff]);
 
-    const zoneNames = useMemo(() => {
-        return Array.from(new Set(zoneOptions.map((zone) => zone.zone))).sort();
-    }, [zoneOptions]);
+    const loadProjectData = useCallback(async () => {
+        if (!account) {
+            return;
+        }
 
-    const visibleZones = useMemo(() => summary?.zones ?? [], [summary]);
-    const visibleSpaces = spaces.slice(0, isStaff ? 14 : 12);
+        try {
+            const bookingEndpoint = isStaff ? "/api/parking" : `/api/parking?accountId=${account.id}`;
+            const nextBookings = await fetcher<ParkingBooking[]>(bookingEndpoint);
+            setBookings(nextBookings);
+            setBookingError(null);
+        } catch (error) {
+            setBookingError(error instanceof Error ? error.message : "Booking service is unavailable");
+        }
+
+        try {
+            const nextPredictions = await fetcher<OccupancyPrediction[]>("/api/occupancy/predictions");
+            setPredictions(nextPredictions);
+            setPredictionError(null);
+        } catch (error) {
+            setPredictions([]);
+            setPredictionError(error instanceof Error ? error.message : "Parking forecast is unavailable");
+        }
+
+        if (isStaff) {
+            try {
+                setAdminSummary(await fetcher<AdminSummary>("/api/adminstats/latest"));
+            } catch {
+                setAdminSummary(null);
+            }
+        }
+    }, [account, isStaff]);
+
+    useEffect(() => {
+        const timeout = window.setTimeout(() => void loadProjectData(), 0);
+        const interval = window.setInterval(() => void loadProjectData(), 5000);
+
+        return () => {
+            window.clearTimeout(timeout);
+            window.clearInterval(interval);
+        };
+    }, [loadProjectData]);
+
+    const zoneNames = useMemo(() => {
+        const names = Array.from(new Set(zoneOptions.map((zone) => zone.zone))).sort();
+        return isStaff || accessibleEligible ? names : names.filter((zone) => zone !== "Accessible");
+    }, [accessibleEligible, isStaff, zoneOptions]);
+
+    const visibleZones = useMemo(() => {
+        const zones = summary?.zones ?? [];
+        return isStaff || accessibleEligible ? zones : zones.filter((zone) => zone.zone !== "Accessible");
+    }, [accessibleEligible, isStaff, summary]);
+    const bookableSpaces = useMemo(() => (
+        isStaff || accessibleEligible ? spaces : spaces.filter((space) => !space.disabilityPermitRequired)
+    ), [accessibleEligible, isStaff, spaces]);
+    const visibleSpaces = (isStaff ? spaces : bookableSpaces).slice(0, isStaff ? 14 : 12);
     const recentEvents = events.slice(0, 8);
     const staffStats = useMemo(() => accountStats(accounts), [accounts]);
     const pendingApprovals = useMemo(() => {
@@ -301,9 +467,23 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
             .filter((zone) => zone.availableSpaces > 0)
             .sort((first, second) => first.occupancyRate - second.occupancyRate || second.availableSpaces - first.availableSpaces)[0];
     }, [visibleZones]);
+    const bestPrediction = useMemo(() => predictions[0], [predictions]);
+    const nearestSpace = useMemo(() => {
+        return [...bookableSpaces]
+            .filter((space) => !space.occupied)
+            .sort((first, second) => distanceMeters(first) - distanceMeters(second))[0];
+    }, [bookableSpaces]);
+    const activeBookings = useMemo(() => {
+        return bookings.filter((booking) => booking.status === "ACTIVE" || booking.status === "RESERVED");
+    }, [bookings]);
+    const selectedBookingSpace = useMemo(() => {
+        const sensorId = bookingSensor || bookableSpaces.find((space) => !space.occupied)?.sensorId || "";
+        return bookableSpaces.find((space) => space.sensorId === sensorId);
+    }, [bookableSpaces, bookingSensor]);
 
     async function approveAccount(accountToApprove: Account) {
         setApprovalBusyId(accountToApprove.id);
+        setApprovalBusyAction("approve");
         setApprovalStatus(null);
 
         try {
@@ -318,6 +498,127 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
             setApprovalStatus(error instanceof Error ? error.message : "Approval failed");
         } finally {
             setApprovalBusyId(null);
+            setApprovalBusyAction(null);
+        }
+    }
+
+    async function rejectAccount(accountToReject: Account) {
+        setApprovalBusyId(accountToReject.id);
+        setApprovalBusyAction("reject");
+        setApprovalStatus(null);
+
+        try {
+            await fetcher<void>(`/api/admin/accounts/${accountToReject.id}`, {
+                method: "DELETE",
+            });
+            setAccounts((currentAccounts) => currentAccounts.filter((currentAccount) => currentAccount.id !== accountToReject.id));
+            setApprovalStatus(`${accountToReject.username} rejected`);
+        } catch (error) {
+            setApprovalStatus(error instanceof Error ? error.message : "Rejection failed");
+        } finally {
+            setApprovalBusyId(null);
+            setApprovalBusyAction(null);
+        }
+    }
+
+    async function createBooking(event: FormEvent) {
+        event.preventDefault();
+
+        if (!account) {
+            setBookingError("Account is still loading");
+            return;
+        }
+
+        const sensorId = bookingSensor || selectedBookingSpace?.sensorId;
+        const space = spaces.find((candidate) => candidate.sensorId === sensorId);
+
+        if (!sensorId || !space) {
+            setBookingError("Choose an available bay");
+            return;
+        }
+
+        if (!isStaff && space.disabilityPermitRequired && !accessibleEligible) {
+            setBookingError("Accessible bays are only shown when you tick accessible parking eligibility");
+            return;
+        }
+
+        const registration = bookingRegistration.trim().toUpperCase();
+        const permitNumber = bookingPermitNumber.trim();
+
+        if (!registration) {
+            setBookingError("Enter your vehicle registration");
+            return;
+        }
+
+        if ((accessibleEligible || space.disabilityPermitRequired) && !permitNumber) {
+            setBookingError("Enter your Mobility Parking Scheme permit number");
+            return;
+        }
+
+        setBookingBusy("create");
+        setBookingStatus(null);
+        setBookingError(null);
+
+        try {
+            const booking = await fetcher<ParkingBooking>("/api/parking", {
+                method: "POST",
+                body: JSON.stringify({
+                    accountId: account.id,
+                    parkingLot: space.lotName,
+                    parkingSpace: sensorId,
+                    vehicle: registration,
+                    mobilityParkingPermitNumber: permitNumber || undefined,
+                    startTime: bookingStart,
+                    endTime: bookingEnd,
+                }),
+            });
+            setBookingStatus(`${bookingBayLabel(booking)} booked`);
+            setBookingSensor("");
+            setBookingRegistration("");
+            setBookingPermitNumber("");
+            setBookingStart(defaultBookingStart());
+            setBookingEnd(defaultBookingEnd());
+            await Promise.all([loadProjectData(), loadSpotter()]);
+        } catch (error) {
+            setBookingError(error instanceof Error ? error.message : "Booking failed");
+        } finally {
+            setBookingBusy(null);
+        }
+    }
+
+    async function cancelBooking(booking: ParkingBooking) {
+        setBookingBusy(`cancel-${booking.id}`);
+        setBookingStatus(null);
+        setBookingError(null);
+
+        try {
+            await fetcher<ParkingBooking>(`/api/parking/${booking.id}/cancel`, {
+                method: "PATCH",
+            });
+            setBookingStatus(`${bookingBayLabel(booking)} cancelled`);
+            await Promise.all([loadProjectData(), loadSpotter()]);
+        } catch (error) {
+            setBookingError(error instanceof Error ? error.message : "Cancellation failed");
+        } finally {
+            setBookingBusy(null);
+        }
+    }
+
+    async function deleteBooking(booking: ParkingBooking) {
+        setBookingBusy(`delete-${booking.id}`);
+        setBookingStatus(null);
+        setBookingError(null);
+
+        try {
+            await fetcher<void>(`/api/parking/${booking.id}`, {
+                method: "DELETE",
+            });
+            setBookingStatus(`${bookingBayLabel(booking)} deleted`);
+            await Promise.all([loadProjectData(), loadSpotter()]);
+        } catch (error) {
+            setBookingError(error instanceof Error ? error.message : "Delete failed");
+        } finally {
+            setBookingBusy(null);
         }
     }
 
@@ -338,7 +639,7 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
             setSummary(result.summary);
             setActionEvents(result.events.map((item) => item.event));
             setActionStatus(`${result.appliedEvents} update${result.appliedEvents === 1 ? "" : "s"} applied`);
-            await loadSpotter();
+            await Promise.all([loadSpotter(), loadProjectData()]);
         } catch (error) {
             setActionEvents([]);
             setActionStatus(error instanceof Error ? error.message : "Sensor feed failed");
@@ -357,7 +658,7 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
                 method: "POST",
             });
             setActionStatus("Parking data reset");
-            await loadSpotter();
+            await Promise.all([loadSpotter(), loadProjectData()]);
         } catch (error) {
             setActionEvents([]);
             setActionStatus(error instanceof Error ? error.message : "Reset failed");
@@ -388,7 +689,7 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
             });
             setActionEvents([event]);
             setActionStatus("Manual reading recorded");
-            await loadSpotter();
+            await Promise.all([loadSpotter(), loadProjectData()]);
         } catch (error) {
             setActionEvents([]);
             setActionStatus(error instanceof Error ? error.message : "Manual reading failed");
@@ -446,37 +747,68 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
                         </label>
 
                         <label className="flex min-w-36 flex-col gap-1 text-sm font-medium text-slate-700">
-                            Zone
+                            Bay type
                             <select
                                 value={selectedZone}
                                 onChange={(event) => setSelectedZone(event.target.value)}
                                 className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm text-slate-950 shadow-sm outline-none focus:border-teal-500"
                             >
-                                <option value="all">All zones</option>
+                                <option value="all">All bay types</option>
                                 {zoneNames.map((zone) => (
                                     <option key={zone} value={zone}>
-                                        Zone {zone}
+                                        {zoneName(zone)}
                                     </option>
                                 ))}
                             </select>
                         </label>
+
+                        {!isStaff && (
+                            <label className="flex min-h-10 min-w-56 items-center gap-2 rounded-md border border-stone-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm">
+                                <input
+                                    type="checkbox"
+                                    checked={accessibleEligible}
+                                    onChange={(event) => {
+                                        const checked = event.target.checked;
+                                        setAccessibleEligible(checked);
+
+                                        if (!checked) {
+                                            if (selectedZone === "Accessible") {
+                                                setSelectedZone("all");
+                                            }
+
+                                            const selectedSpace = spaces.find((space) => space.sensorId === bookingSensor);
+                                            if (selectedSpace?.disabilityPermitRequired) {
+                                                setBookingSensor("");
+                                            }
+
+                                            setBookingPermitNumber("");
+                                        }
+                                    }}
+                                    className="h-4 w-4 rounded border-stone-300 text-teal-700 focus:ring-teal-600"
+                                />
+                                Eligible for accessible parking
+                            </label>
+                        )}
                     </div>
                 </header>
 
-                {(spotterError || accountError) && (
+                {(spotterError || accountError || bookingError || predictionError) && (
                     <section className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                        {spotterError ? `Spotter: ${spotterError}` : `Accounts: ${accountError}`}
+                        {spotterError && <p>Parking availability: {spotterError}</p>}
+                        {accountError && <p>Accounts: {accountError}</p>}
+                        {bookingError && <p>Bookings: {bookingError}</p>}
+                        {predictionError && <p>Predictions: {predictionError}</p>}
                     </section>
                 )}
 
                 <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    <Metric label="Available" value={metricValue(summary?.availableSpaces)} detail={`${metricValue(summary?.totalSpaces)} total spaces`} tone="emerald" />
+                    <Metric label="Available" value={metricValue(summary?.availableSpaces)} detail={`${metricValue(summary?.totalSpaces)} total bays`} tone="emerald" />
                     <Metric label="Occupied" value={metricValue(summary?.occupiedSpaces)} detail={`${percent(summary?.occupancyRate ?? 0)} occupancy`} tone="rose" />
-                    <Metric label="Accessible free" value={metricValue(summary?.availableDisabilityPermitSpaces)} detail={`${metricValue(summary?.disabilityPermitSpaces)} disability-permit bays`} tone="sky" />
+                    <Metric label="Accessible bays free" value={metricValue(summary?.availableDisabilityPermitSpaces)} detail={`${metricValue(summary?.disabilityPermitSpaces)} accessible bays`} tone="sky" />
                     <Metric
-                        label={isStaff ? "Accounts" : "Best zone"}
-                        value={isStaff ? metricValue(staffStats.total) : bestZone ? `${bestZone.lotName} ${bestZone.zone}` : "Checking"}
-                        detail={isStaff ? `${staffStats.staff} staff/admin, ${staffStats.disabled} disabled` : bestZone ? `${bestZone.availableSpaces} free spaces` : "No spaces match filters"}
+                        label={isStaff ? "Accounts" : "Best car park"}
+                        value={isStaff ? metricValue(staffStats.total) : bestZone ? bestZone.lotName : "Checking"}
+                        detail={isStaff ? `${staffStats.staff} staff/admin, ${staffStats.disabled} disabled` : bestZone ? `${bestZone.availableSpaces} free ${zoneName(bestZone.zone).toLowerCase()}` : "No bays match filters"}
                         tone="violet"
                     />
                 </section>
@@ -485,7 +817,54 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
                     <section className="grid gap-3 sm:grid-cols-3">
                         <Metric label="User accounts" value={metricValue(staffStats.users)} detail={`${staffStats.premium} premium subscriptions`} tone="sky" />
                         <Metric label="Sensor events" value={metricValue(events.length)} detail="Recent stored readings" tone="amber" />
-                        <Metric label="Showing spaces" value={metricValue(spaces.length)} detail={selectedLot === "all" ? "Across all lots" : selectedLot} tone="emerald" />
+                        <Metric label="Active bookings" value={metricValue(activeBookings.length)} detail={`${metricValue(bookings.length)} booking records`} tone="emerald" />
+                    </section>
+                )}
+
+                {isStaff && (
+                    <BookingManager
+                        bookings={bookings}
+                        busy={bookingBusy}
+                        status={bookingStatus}
+                        onCancel={cancelBooking}
+                        onDelete={deleteBooking}
+                    />
+                )}
+
+                {!isStaff && (
+                    <SmartRecommendations
+                        bestZone={bestZone}
+                        bestPrediction={bestPrediction}
+                        nearestSpace={nearestSpace}
+                    />
+                )}
+
+                {!isStaff && (
+                    <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
+                        <BookingPanel
+                            spaces={bookableSpaces}
+                            bookingSensor={bookingSensor || selectedBookingSpace?.sensorId || ""}
+                            registration={bookingRegistration}
+                            permitNumber={bookingPermitNumber}
+                            showPermitNumber={accessibleEligible}
+                            startTime={bookingStart}
+                            endTime={bookingEnd}
+                            busy={bookingBusy}
+                            status={bookingStatus}
+                            onSensorChange={setBookingSensor}
+                            onRegistrationChange={setBookingRegistration}
+                            onPermitNumberChange={setBookingPermitNumber}
+                            onStartChange={setBookingStart}
+                            onEndChange={setBookingEnd}
+                            onSubmit={createBooking}
+                        />
+                        <BookingList
+                            bookings={bookings.slice(0, 8)}
+                            title="Your bookings"
+                            emptyText="No bookings yet."
+                            busy={bookingBusy}
+                            onCancel={cancelBooking}
+                        />
                     </section>
                 )}
 
@@ -512,9 +891,28 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
                     <PendingAccountApprovals
                         accounts={pendingApprovals}
                         approvalBusyId={approvalBusyId}
+                        approvalBusyAction={approvalBusyAction}
                         approvalStatus={approvalStatus}
                         onApprove={approveAccount}
+                        onReject={rejectAccount}
                     />
+                )}
+
+                {isStaff && (
+                    <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
+                        <BookingList
+                            bookings={bookings.slice(0, 10)}
+                            title="Booking activity"
+                            emptyText="No booking records yet."
+                            busy={bookingBusy}
+                            onCancel={cancelBooking}
+                            onDelete={deleteBooking}
+                        />
+                        <StaffAnalytics
+                            adminSummary={adminSummary}
+                            predictions={predictions}
+                        />
+                    </section>
                 )}
 
                 <section className="grid gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
@@ -540,6 +938,373 @@ function Metric({ label, value, detail, tone }: { label: string; value: string; 
             <p className="text-sm font-medium text-slate-600">{label}</p>
             <p className="mt-2 break-words text-3xl font-semibold tracking-normal text-slate-950">{value}</p>
             <p className="mt-1 text-sm text-slate-600">{detail}</p>
+        </div>
+    );
+}
+
+function SmartRecommendations({
+    bestZone,
+    bestPrediction,
+    nearestSpace,
+}: {
+    bestZone?: ZoneSummary;
+    bestPrediction?: OccupancyPrediction;
+    nearestSpace?: Space;
+}) {
+    const nearestDistance = nearestSpace ? distanceMeters(nearestSpace) : Number.POSITIVE_INFINITY;
+
+    return (
+        <section className="grid gap-3 md:grid-cols-3">
+            <RecommendationCard
+                label="Best now"
+                value={bestZone ? bestZone.lotName : "Checking"}
+                detail={bestZone ? `${bestZone.availableSpaces} free ${zoneName(bestZone.zone).toLowerCase()} right now` : "Waiting for live availability"}
+            />
+            <RecommendationCard
+                label="Best later"
+                value={bestPrediction ? bestPrediction.lotId : "Checking"}
+                detail={bestPrediction ? `${probability(bestPrediction.availabilityProbability)} availability, about ${bestPrediction.estimatedAvailableSpaces} bays free` : "Waiting for forecast"}
+            />
+            <RecommendationCard
+                label="Closest free"
+                value={nearestSpace ? nearestSpace.displayName : "Checking"}
+                detail={nearestSpace ? formatDistance(nearestDistance) : "No free bays match filters"}
+            />
+        </section>
+    );
+}
+
+function RecommendationCard({ label, value, detail }: { label: string; value: string; detail: string }) {
+    return (
+        <article className="rounded-lg border border-stone-300 bg-white p-4 shadow-sm">
+            <p className="text-sm font-medium text-slate-600">{label}</p>
+            <p className="mt-2 break-words text-xl font-semibold tracking-normal text-slate-950">{value}</p>
+            <p className="mt-1 text-sm text-slate-600">{detail}</p>
+        </article>
+    );
+}
+
+function BookingPanel({
+    spaces,
+    bookingSensor,
+    registration,
+    permitNumber,
+    showPermitNumber,
+    startTime,
+    endTime,
+    busy,
+    status,
+    onSensorChange,
+    onRegistrationChange,
+    onPermitNumberChange,
+    onStartChange,
+    onEndChange,
+    onSubmit,
+}: {
+    spaces: Space[];
+    bookingSensor: string;
+    registration: string;
+    permitNumber: string;
+    showPermitNumber: boolean;
+    startTime: string;
+    endTime: string;
+    busy: string | null;
+    status: string | null;
+    onSensorChange: (value: string) => void;
+    onRegistrationChange: (value: string) => void;
+    onPermitNumberChange: (value: string) => void;
+    onStartChange: (value: string) => void;
+    onEndChange: (value: string) => void;
+    onSubmit: (event: FormEvent) => Promise<void>;
+}) {
+    return (
+        <section className="rounded-lg border border-stone-300 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+                <div>
+                    <h2 className="text-lg font-semibold text-slate-950">Book a parking bay</h2>
+                    <p className="text-sm text-slate-600">Reserve an available parking bay.</p>
+                </div>
+                <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{spaces.length}</span>
+            </div>
+
+            <form onSubmit={(event) => void onSubmit(event)} className="mt-4 grid gap-3">
+                <label className="flex min-w-0 flex-col gap-1 text-sm font-medium text-slate-700">
+                    Parking bay
+                    <select
+                        value={bookingSensor}
+                        onChange={(event) => onSensorChange(event.target.value)}
+                        className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-teal-500"
+                    >
+                        {spaces.map((space) => (
+                            <option key={space.sensorId} value={space.sensorId}>
+                                {space.displayName}
+                            </option>
+                        ))}
+                    </select>
+                </label>
+
+                <label className="flex min-w-0 flex-col gap-1 text-sm font-medium text-slate-700">
+                    Vehicle registration
+                    <input
+                        value={registration}
+                        onChange={(event) => onRegistrationChange(event.target.value.toUpperCase())}
+                        placeholder="ABC123"
+                        className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-teal-500"
+                        required
+                    />
+                </label>
+
+                {showPermitNumber && (
+                    <label className="flex min-w-0 flex-col gap-1 text-sm font-medium text-slate-700">
+                        Mobility Parking Scheme permit number
+                        <input
+                            value={permitNumber}
+                            onChange={(event) => onPermitNumberChange(event.target.value.toUpperCase())}
+                            placeholder="MPS permit number"
+                            className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-teal-500"
+                            required
+                        />
+                    </label>
+                )}
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="flex min-w-0 flex-col gap-1 text-sm font-medium text-slate-700">
+                        Start
+                        <input
+                            type="datetime-local"
+                            value={startTime}
+                            onChange={(event) => onStartChange(event.target.value)}
+                            className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-teal-500"
+                            required
+                        />
+                    </label>
+                    <label className="flex min-w-0 flex-col gap-1 text-sm font-medium text-slate-700">
+                        End
+                        <input
+                            type="datetime-local"
+                            value={endTime}
+                            onChange={(event) => onEndChange(event.target.value)}
+                            className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-teal-500"
+                            required
+                        />
+                    </label>
+                </div>
+
+                <button
+                    type="submit"
+                    disabled={Boolean(busy) || spaces.length === 0}
+                    className="h-10 rounded-md bg-teal-700 px-4 text-sm font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    {busy === "create" ? "Booking" : "Book bay"}
+                </button>
+            </form>
+
+            {status && <p className="mt-3 text-sm font-medium text-slate-700">{status}</p>}
+        </section>
+    );
+}
+
+function bookingOptionLabel(booking: ParkingBooking) {
+    return `${bookingBayLabel(booking)} - Rego ${booking.vehicle} - Account ${booking.accountId} - ${booking.status.toLowerCase()}`;
+}
+
+function BookingManager({
+    bookings,
+    busy,
+    status,
+    onCancel,
+    onDelete,
+}: {
+    bookings: ParkingBooking[];
+    busy: string | null;
+    status: string | null;
+    onCancel: (booking: ParkingBooking) => Promise<void>;
+    onDelete: (booking: ParkingBooking) => Promise<void>;
+}) {
+    const [selectedBookingId, setSelectedBookingId] = useState("");
+    const selectedBooking = bookings.find((booking) => String(booking.id) === selectedBookingId) ?? bookings[0];
+    const cancellable = selectedBooking?.status === "RESERVED" || selectedBooking?.status === "ACTIVE";
+
+    return (
+        <section className="rounded-lg border border-stone-300 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold text-slate-950">Manage bookings</h2>
+                <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{bookings.length}</span>
+            </div>
+
+            <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                <label className="flex min-w-0 flex-col gap-1 text-sm font-medium text-slate-700">
+                    Booking
+                    <select
+                        value={selectedBooking ? String(selectedBooking.id) : ""}
+                        onChange={(event) => setSelectedBookingId(event.target.value)}
+                        disabled={bookings.length === 0}
+                        className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {bookings.length === 0 && <option value="">No bookings</option>}
+                        {bookings.map((booking) => (
+                            <option key={booking.id} value={booking.id}>
+                                {bookingOptionLabel(booking)}
+                            </option>
+                        ))}
+                    </select>
+                </label>
+
+                <div className="flex flex-wrap gap-2">
+                    <button
+                        type="button"
+                        onClick={() => selectedBooking && void onCancel(selectedBooking)}
+                        disabled={Boolean(busy) || !selectedBooking || !cancellable}
+                        className="h-10 rounded-md border border-stone-300 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {selectedBooking && busy === `cancel-${selectedBooking.id}` ? "Cancelling" : "Cancel"}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => selectedBooking && void onDelete(selectedBooking)}
+                        disabled={Boolean(busy) || !selectedBooking}
+                        className="h-10 rounded-md border border-rose-200 bg-rose-50 px-4 text-sm font-semibold text-rose-800 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {selectedBooking && busy === `delete-${selectedBooking.id}` ? "Deleting" : "Delete"}
+                    </button>
+                </div>
+            </div>
+
+            {selectedBooking && (
+                <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-5">
+                    <p><span className="font-semibold text-slate-900">Bay:</span> {bookingBayLabel(selectedBooking)}</p>
+                    <p><span className="font-semibold text-slate-900">Rego:</span> {selectedBooking.vehicle}</p>
+                    <p><span className="font-semibold text-slate-900">Account:</span> {selectedBooking.accountId}</p>
+                    <p><span className="font-semibold text-slate-900">Status:</span> {selectedBooking.status.toLowerCase()}</p>
+                    <p><span className="font-semibold text-slate-900">MPS permit:</span> {selectedBooking.mobilityParkingPermitNumber || "Not supplied"}</p>
+                </div>
+            )}
+
+            {status && <p className="mt-3 text-sm font-medium text-slate-700">{status}</p>}
+        </section>
+    );
+}
+
+function BookingList({
+    bookings,
+    title,
+    emptyText,
+    busy,
+    onCancel,
+    onDelete,
+}: {
+    bookings: ParkingBooking[];
+    title: string;
+    emptyText: string;
+    busy: string | null;
+    onCancel: (booking: ParkingBooking) => Promise<void>;
+    onDelete?: (booking: ParkingBooking) => Promise<void>;
+}) {
+    return (
+        <section className="rounded-lg border border-stone-300 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold text-slate-950">{title}</h2>
+                <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{bookings.length}</span>
+            </div>
+
+            <div className="mt-3 divide-y divide-stone-200">
+                {bookings.length === 0 && <p className="py-6 text-sm text-slate-600">{emptyText}</p>}
+                {bookings.map((booking) => {
+                    const cancellable = booking.status === "RESERVED" || booking.status === "ACTIVE";
+                    return (
+                        <div key={booking.id} className="grid gap-3 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                            <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <p className="truncate text-sm font-semibold text-slate-950">{bookingBayLabel(booking)}</p>
+                                    <StatusPill status={booking.status} />
+                                </div>
+                                <p className="truncate text-xs text-slate-600">
+                                    {booking.parkingLot} - Rego {booking.vehicle}
+                                </p>
+                                <p className="truncate text-xs text-slate-500">
+                                    {formatDateTime(booking.startTime)} to {formatDateTime(booking.endTime)}
+                                </p>
+                                {booking.mobilityParkingPermitNumber && (
+                                    <p className="truncate text-xs text-slate-500">
+                                        MPS permit {booking.mobilityParkingPermitNumber}
+                                    </p>
+                                )}
+                            </div>
+                            {(cancellable || onDelete) && (
+                                <div className="flex flex-wrap gap-2 sm:justify-end">
+                                    {cancellable && (
+                                        <button
+                                            type="button"
+                                            onClick={() => void onCancel(booking)}
+                                            disabled={Boolean(busy)}
+                                            className="h-9 rounded-md border border-stone-300 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            {busy === `cancel-${booking.id}` ? "Cancelling" : "Cancel"}
+                                        </button>
+                                    )}
+                                    {onDelete && (
+                                        <button
+                                            type="button"
+                                            onClick={() => void onDelete(booking)}
+                                            disabled={Boolean(busy)}
+                                            className="h-9 rounded-md border border-rose-200 bg-rose-50 px-3 text-sm font-semibold text-rose-800 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            {busy === `delete-${booking.id}` ? "Deleting" : "Delete"}
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+        </section>
+    );
+}
+
+function StaffAnalytics({
+    adminSummary,
+    predictions,
+}: {
+    adminSummary: AdminSummary | null;
+    predictions: OccupancyPrediction[];
+}) {
+    const bestPrediction = predictions[0];
+
+    return (
+        <section className="rounded-lg border border-stone-300 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold text-slate-950">Predictions and stats</h2>
+                <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{predictions.length}</span>
+            </div>
+
+            <div className="mt-4 grid gap-3">
+                <MiniStat
+                    label="Best predicted lot"
+                    value={bestPrediction ? bestPrediction.lotId : "Checking"}
+                    detail={bestPrediction ? `${probability(bestPrediction.availabilityProbability)} availability` : "Prediction service loading"}
+                />
+                <MiniStat
+                    label="Latest occupancy snapshot"
+                    value={adminSummary?.occupancySnapshot ? `${adminSummary.occupancySnapshot.spotsTaken}/${adminSummary.occupancySnapshot.spotsTotal}` : "Unavailable"}
+                    detail={adminSummary?.occupancySnapshot ? `${adminSummary.occupancySnapshot.hour}:00 on ${adminSummary.date}` : "Admin stats service loading"}
+                />
+                <MiniStat
+                    label="Peak and utilisation"
+                    value={adminSummary?.peakHourSnapshot ? `${adminSummary.peakHourSnapshot.hour}:00 peak` : "Unavailable"}
+                    detail={adminSummary?.utilisationSnapshot ? `${percent(adminSummary.utilisationSnapshot.utilisationRate)} daily utilisation` : "Waiting for analytics"}
+                />
+            </div>
+        </section>
+    );
+}
+
+function MiniStat({ label, value, detail }: { label: string; value: string; detail: string }) {
+    return (
+        <div className="rounded-md border border-stone-200 p-3">
+            <p className="text-xs font-medium text-slate-500">{label}</p>
+            <p className="mt-1 break-words text-base font-semibold text-slate-950">{value}</p>
+            <p className="mt-1 text-xs text-slate-600">{detail}</p>
         </div>
     );
 }
@@ -572,8 +1337,8 @@ function StaffControls({
     return (
         <section className="rounded-lg border border-stone-300 bg-white p-4 shadow-sm">
             <div className="flex flex-col gap-1">
-                <h2 className="text-lg font-semibold text-slate-950">Sensor feed</h2>
-                <p className="text-sm text-slate-600">Apply readings to the live parking dataset.</p>
+                <h2 className="text-lg font-semibold text-slate-950">Live bay updates</h2>
+                <p className="text-sm text-slate-600">Apply bay readings to the live parking view.</p>
             </div>
 
             <div className="mt-4 flex flex-wrap gap-2">
@@ -605,7 +1370,7 @@ function StaffControls({
 
             <div className="mt-5 grid gap-3 sm:grid-cols-[minmax(0,1fr)_140px_auto]">
                 <label className="flex min-w-0 flex-col gap-1 text-sm font-medium text-slate-700">
-                    Sensor
+                    Bay sensor
                     <select
                         value={selectedSensor}
                         onChange={(event) => onSensorChange(event.target.value)}
@@ -649,7 +1414,7 @@ function StaffControls({
                                     {event.sensorId} - {eventChangeText(event)}
                                 </p>
                                 <p className="truncate text-xs text-slate-600">
-                                    {event.lotName} - Zone {event.zone} - Bay {event.bayNumber}
+                                    {event.lotName} - {zoneName(event.zone)} - Bay {event.bayNumber}
                                 </p>
                             </div>
                             <div className="flex items-center gap-2 sm:justify-end">
@@ -675,12 +1440,12 @@ function RecentEvents({ events, totalEvents }: { events: DetectionEvent[]; total
                 <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{totalEvents}</span>
             </div>
             <div className="mt-3 divide-y divide-stone-200">
-                {events.length === 0 && <p className="py-6 text-sm text-slate-600">No sensor readings yet.</p>}
+                {events.length === 0 && <p className="py-6 text-sm text-slate-600">No bay updates yet.</p>}
                 {events.map((event) => (
                     <div key={event.id} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-3">
                         <div className="min-w-0">
                             <p className="truncate text-sm font-semibold text-slate-950">
-                                {event.lotName} - Zone {event.zone} - Bay {event.bayNumber}
+                                {event.lotName} - {zoneName(event.zone)} - Bay {event.bayNumber}
                             </p>
                             <p className="truncate text-xs text-slate-600">
                                 {event.sensorId} - {event.source} - {eventChangeText(event)}
@@ -700,13 +1465,17 @@ function RecentEvents({ events, totalEvents }: { events: DetectionEvent[]; total
 function PendingAccountApprovals({
     accounts,
     approvalBusyId,
+    approvalBusyAction,
     approvalStatus,
     onApprove,
+    onReject,
 }: {
     accounts: Account[];
     approvalBusyId: number | null;
+    approvalBusyAction: "approve" | "reject" | null;
     approvalStatus: string | null;
     onApprove: (account: Account) => Promise<void>;
+    onReject: (account: Account) => Promise<void>;
 }) {
     return (
         <section className="rounded-lg border border-stone-300 bg-white p-4 shadow-sm">
@@ -728,14 +1497,24 @@ function PendingAccountApprovals({
                             </div>
                             <p className="truncate text-xs text-slate-600">{adminAccount.email}</p>
                         </div>
-                        <button
-                            type="button"
-                            onClick={() => void onApprove(adminAccount)}
-                            disabled={approvalBusyId !== null}
-                            className="h-10 rounded-md bg-teal-700 px-4 text-sm font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                            {approvalBusyId === adminAccount.id ? "Approving" : "Approve"}
-                        </button>
+                        <div className="flex flex-wrap gap-2">
+                            <button
+                                type="button"
+                                onClick={() => void onApprove(adminAccount)}
+                                disabled={approvalBusyId !== null}
+                                className="h-10 rounded-md bg-teal-700 px-4 text-sm font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {approvalBusyId === adminAccount.id && approvalBusyAction === "approve" ? "Approving" : "Approve"}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => void onReject(adminAccount)}
+                                disabled={approvalBusyId !== null}
+                                className="h-10 rounded-md border border-rose-200 bg-rose-50 px-4 text-sm font-semibold text-rose-800 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {approvalBusyId === adminAccount.id && approvalBusyAction === "reject" ? "Rejecting" : "Reject"}
+                            </button>
+                        </div>
                     </div>
                 ))}
             </div>
@@ -747,16 +1526,16 @@ function ZoneOverview({ zones }: { zones: ZoneSummary[] }) {
     return (
         <section className="rounded-lg border border-stone-300 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between gap-3">
-                <h2 className="text-lg font-semibold text-slate-950">Zone availability</h2>
+                <h2 className="text-lg font-semibold text-slate-950">Bay availability</h2>
                 <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{zones.length}</span>
             </div>
             <div className="mt-4 space-y-3">
-                {zones.length === 0 && <p className="py-8 text-sm text-slate-600">No zones match the current filters.</p>}
+                {zones.length === 0 && <p className="py-8 text-sm text-slate-600">No bays match the current filters.</p>}
                 {zones.map((zone) => (
                     <div key={`${zone.lotName}-${zone.zone}`} className="rounded-md border border-stone-200 p-3">
                         <div className="flex items-center justify-between gap-3">
                             <div>
-                                <p className="text-sm font-semibold text-slate-950">{zone.lotName} - Zone {zone.zone}</p>
+                                <p className="text-sm font-semibold text-slate-950">{zone.lotName} - {zoneName(zone.zone)}</p>
                                 <p className="text-xs text-slate-600">{zone.availableSpaces} free of {zone.totalSpaces}</p>
                             </div>
                             <p className="text-sm font-semibold text-slate-700">{percent(zone.occupancyRate)}</p>
@@ -778,17 +1557,17 @@ function SpaceList({ spaces, isStaff }: { spaces: Space[]; isStaff: boolean }) {
     return (
         <section className="rounded-lg border border-stone-300 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between gap-3">
-                <h2 className="text-lg font-semibold text-slate-950">{isStaff ? "Space status" : "Available spaces"}</h2>
+                <h2 className="text-lg font-semibold text-slate-950">{isStaff ? "Bay status" : "Available bays"}</h2>
                 <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{spaces.length}</span>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                {spaces.length === 0 && <p className="py-8 text-sm text-slate-600">No spaces match the current filters.</p>}
+                {spaces.length === 0 && <p className="py-8 text-sm text-slate-600">No bays match the current filters.</p>}
                 {spaces.map((space) => (
                     <article key={space.id} className="rounded-md border border-stone-200 p-3">
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
                                 <p className="truncate text-sm font-semibold text-slate-950">{space.displayName}</p>
-                                <p className="truncate text-xs text-slate-600">{space.sensorId}</p>
+                                {isStaff && <p className="truncate text-xs text-slate-600">{space.sensorId}</p>}
                             </div>
                             <OccupancyPill occupied={space.occupied} />
                         </div>
@@ -798,8 +1577,8 @@ function SpaceList({ spaces, isStaff }: { spaces: Space[]; isStaff: boolean }) {
                                 <p>Lot</p>
                             </div>
                             <div>
-                                <p className="font-semibold text-slate-900">Zone {space.zone}</p>
-                                <p>Area</p>
+                                <p className="font-semibold text-slate-900">{bayTypeLabel(space.zone)}</p>
+                                <p>Bay type</p>
                             </div>
                             <div>
                                 <p className="font-semibold text-slate-900">{space.maxParkingMinutes}m</p>
@@ -808,9 +1587,9 @@ function SpaceList({ spaces, isStaff }: { spaces: Space[]; isStaff: boolean }) {
                         </div>
                         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                             {space.disabilityPermitRequired && (
-                                <span className="rounded-md bg-sky-50 px-2 py-1 font-semibold text-sky-800">Permit bay</span>
+                                <span className="rounded-md bg-sky-50 px-2 py-1 font-semibold text-sky-800">Accessible bay</span>
                             )}
-                            <span>{Math.round(space.confidence * 100)}% confidence</span>
+                            {isStaff && <span>{Math.round(space.confidence * 100)}% confidence</span>}
                             <span>{formatDateTime(space.lastUpdated)}</span>
                         </div>
                     </article>
@@ -824,6 +1603,22 @@ function OccupancyPill({ occupied }: { occupied: boolean }) {
     return (
         <span className={`whitespace-nowrap rounded-md px-2 py-1 text-xs font-semibold ${occupied ? "bg-rose-50 text-rose-800" : "bg-emerald-50 text-emerald-800"}`}>
             {occupied ? "Occupied" : "Free"}
+        </span>
+    );
+}
+
+function StatusPill({ status }: { status: ParkingBooking["status"] }) {
+    const tones = {
+        ACTIVE: "bg-emerald-50 text-emerald-800",
+        RESERVED: "bg-sky-50 text-sky-800",
+        EXPIRED: "bg-stone-100 text-stone-700",
+        CANCELLED: "bg-rose-50 text-rose-800",
+        COMPLETED: "bg-violet-50 text-violet-800",
+    };
+
+    return (
+        <span className={`whitespace-nowrap rounded-md px-2 py-1 text-xs font-semibold ${tones[status]}`}>
+            {status.toLowerCase()}
         </span>
     );
 }

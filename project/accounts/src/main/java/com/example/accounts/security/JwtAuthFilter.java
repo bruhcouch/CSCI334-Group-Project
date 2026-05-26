@@ -35,7 +35,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
         String path = request.getRequestURI();
 
-        // Skip auth endpoints
         if (path.contains("/login") || path.contains("/register")) {
             filterChain.doFilter(request, response);
             return;
@@ -52,17 +51,14 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             }
         }
 
-        // No token -> continue chain
         if (token == null) {
             filterChain.doFilter(request, response);
             return;
         }
 
-        // Extract identity
         String email = jwtService.extractEmail(token);
 
 
-        // If valid and not already authenticated
         if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
 
             try {
@@ -71,7 +67,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     
                     UserDetails userDetails = accountUserDetailsService.loadUserByUsername(email);
                     
-                    // Build authentication object
                     UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
                         userDetails, null, userDetails.getAuthorities());
                         

@@ -27,25 +27,21 @@ public class AnalyticsService {
         this.adminRepo = adminRepo;
     }
 
-    // turns a String of comma seperated integers into an integer array for iterating
     public int[] getOccupancyAsArray(String occupancyPerHour) {
         return Arrays.stream(occupancyPerHour.split(","))
                     .mapToInt(Integer::parseInt)
                     .toArray();
     }
 
-    // assembles the snapshot object from DTO retrieved from database
     public SnapshotDTO snapshotAssembler(Snapshot snapshot){
         SnapshotDTO snapshotDTO = new SnapshotDTO();
-        snapshotDTO.setLotId(snapshot.getLotId()); // lot id -> lot id
-        snapshotDTO.setSpotsTotal(snapshot.getSpotsTotal()); // total -> total
-        snapshotDTO.setDate(snapshot.getDate()); // date string -> parse date
-        snapshotDTO.setOccupancy(getOccupancyAsArray(snapshot.getOccupancy())); // occ string -> deserialisation
+        snapshotDTO.setLotId(snapshot.getLotId());
+        snapshotDTO.setSpotsTotal(snapshot.getSpotsTotal());
+        snapshotDTO.setDate(snapshot.getDate());
+        snapshotDTO.setOccupancy(getOccupancyAsArray(snapshot.getOccupancy()));
         return snapshotDTO;
     }
 
-    // facade / factory patterns
-    // takes a date to determine which day to summarise, and builds the composite object
     public Summary getSummary(LocalDate date){
 
         Snapshot snapshot = adminRepo.findSnapshotByDate(date);

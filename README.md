@@ -9,7 +9,7 @@ For the dashboard demo on Windows, double-click:
 start-dashboard.bat
 ```
 
-It opens Kafka, Accounts, API Gateway, Spotter and the frontend in separate terminal windows, then opens `http://localhost:3000`.
+It opens Kafka, Accounts, API Gateway, Spotter, Parking, Occupancy, Admin Stats and the frontend in separate terminal windows, then opens `http://localhost:3000`.
 
 Open up the backend directory
 ```
@@ -97,8 +97,8 @@ Logging in as admin
 curl -i -c cookies.txt -X POST http://localhost:8089/api/accounts/login \
 -H "Content-Type: application/json" \
 -d '{
-  "email": "admin@example.com",
-  "password": "changemepls123!"
+  "email": "admin@uowmail.edu.au",
+  "password": "test123"
 }'
 ```
 
@@ -191,7 +191,7 @@ curl -i -b cookies.txt -X DELETE "http://localhost:8089/api/admin/accounts/89"
 
 # Spotter Microservice
 
-The Spotter service provides UOW parking space detection, seeded parking data, and a repeatable sensor simulation feed for frontend and analytics work.
+The Spotter service provides UOW parking space detection, 100 seeded UOW parking spaces, and a repeatable sensor simulation feed for frontend and analytics work.
 
 It runs on port `8085` and loads its datasets from inside the service:
 
@@ -232,7 +232,7 @@ curl http://localhost:8085/api/spotter/events
 Filter spaces by lot, zone, occupancy, or disability permit requirement:
 
 ```
-curl "http://localhost:8085/api/spotter/spaces?lotName=P1-North&zone=A&occupied=false"
+curl "http://localhost:8085/api/spotter/spaces?lotName=P1&zone=General&occupied=false"
 ```
 
 Advance the simulation by one sensor event:
@@ -255,7 +255,7 @@ curl -X POST http://localhost:8085/api/spotter/simulation/run \
 Record a manual sensor reading:
 
 ```
-curl -X POST http://localhost:8085/api/spotter/sensors/UOW-P1-A-001/detect \
+curl -X POST http://localhost:8085/api/spotter/sensors/UOW-P1-GEN-004/detect \
 -H "Content-Type: application/json" \
 -d '{
   "occupied": true,
@@ -268,5 +268,39 @@ Reset the in-memory database back to the CSV dataset and restart the simulation 
 
 ```
 curl -X POST http://localhost:8085/api/spotter/simulation/reset
+```
+
+# Parking Bookings
+
+The Parking service runs on port `8082`. Bookings reserve real Spotter sensor IDs, prevent overlapping active/reserved bookings for the same space, and automatically expire old bookings.
+
+Create a booking through the API gateway:
+
+```
+curl -X POST http://localhost:8089/api/parking \
+-H "Content-Type: application/json" \
+-d '{
+  "accountId": 1,
+  "parkingLot": "P1",
+  "parkingSpace": "UOW-P1-GEN-004",
+  "vehicle": "ABC123",
+  "startTime": "2026-05-27T09:00",
+  "endTime": "2026-05-27T11:00"
+}'
+```
+
+Cancel a booking:
+
+```
+curl -X PATCH http://localhost:8089/api/parking/1/cancel
+```
+
+# Occupancy Predictions
+
+The Occupancy service runs on port `8083` and exposes current occupancy, historical occupancy, and prediction endpoints.
+
+```
+curl http://localhost:8089/api/occupancy/predictions
+curl http://localhost:8089/api/occupancy/P1/predict
 ```
   

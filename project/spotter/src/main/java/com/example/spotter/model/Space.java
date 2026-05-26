@@ -171,7 +171,10 @@ public class Space {
 	}
 
 	public String getDisplayName() {
-		return lotName + "-" + zone + "-" + bayNumber;
+		if (disabilityPermitRequired) {
+			return lotName + " Accessible " + bayNumber;
+		}
+		return lotName + " Bay " + bayNumber;
 	}
 
 	public void applyDetection(boolean occupied, double confidence, String source, Instant detectedAt) {

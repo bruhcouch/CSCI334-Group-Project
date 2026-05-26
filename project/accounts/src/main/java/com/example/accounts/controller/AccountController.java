@@ -35,8 +35,6 @@ public class AccountController {
         this.accountService = accountService;
     }
 
-    // Creating account (registration) and authentication (login)
-
     @PostMapping("/register")
     public ResponseEntity<RegisterResponse> register(@RequestBody RegisterRequest registerRequest, HttpServletResponse response) {
         RegisterResult registerResult = accountService.register(registerRequest);
@@ -102,8 +100,6 @@ public class AccountController {
             .body(authResponse);
     }
 
-    // Reading their own account details
-
     @GetMapping()
     public ResponseEntity<AccountResponse> getAccount() {
 
@@ -115,8 +111,6 @@ public class AccountController {
 
     }
 
-    // Updating their account details
-
     @PatchMapping()
     public ResponseEntity<Void> update(@RequestBody UpdateRequest updateRequest) {
 
@@ -126,8 +120,6 @@ public class AccountController {
         accountService.update(updateRequest, email);
         return new ResponseEntity<>(HttpStatus.NO_CONTENT);
     }
-
-    // updating subscription
 
     @PatchMapping("/subscription/upgrade")
     public ResponseEntity<Void> upgradeSubscription() {

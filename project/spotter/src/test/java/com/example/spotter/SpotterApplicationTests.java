@@ -29,7 +29,7 @@ class SpotterApplicationTests {
 	void exposesSeededSpacesForFrontend() throws Exception {
 		mockMvc.perform(get("/api/spotter/spaces"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$", hasSize(30)))
+				.andExpect(jsonPath("$", hasSize(100)))
 				.andExpect(jsonPath("$[0].sensorId").exists())
 				.andExpect(jsonPath("$[0].lotName").exists())
 				.andExpect(jsonPath("$[0].occupied").exists());
@@ -43,7 +43,7 @@ class SpotterApplicationTests {
 				.andExpect(jsonPath("$.appliedEvents").value(1))
 				.andExpect(jsonPath("$.feedSize", greaterThanOrEqualTo(1)))
 				.andExpect(jsonPath("$.events", hasSize(1)))
-				.andExpect(jsonPath("$.summary.totalSpaces").value(30));
+				.andExpect(jsonPath("$.summary.totalSpaces").value(100));
 	}
 
 	@Test
@@ -56,7 +56,7 @@ class SpotterApplicationTests {
 						.contentType(MediaType.APPLICATION_JSON))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.appliedEvents").value(0))
-				.andExpect(jsonPath("$.summary.totalSpaces").value(30));
+				.andExpect(jsonPath("$.summary.totalSpaces").value(100));
 
 		mockMvc.perform(get("/api/spotter/events"))
 				.andExpect(status().isOk())
@@ -64,7 +64,7 @@ class SpotterApplicationTests {
 	}
 
 	@Test
-	void returnsMoreThanOneHundredStoredEvents() throws Exception {
+	void capsStoredEventsAtOneHundred() throws Exception {
 		mockMvc.perform(post("/api/spotter/simulation/reset")
 						.contentType(MediaType.APPLICATION_JSON))
 				.andExpect(status().isOk());
@@ -77,6 +77,6 @@ class SpotterApplicationTests {
 
 		mockMvc.perform(get("/api/spotter/events"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$", hasSize(105)));
+				.andExpect(jsonPath("$", hasSize(100)));
 	}
 }

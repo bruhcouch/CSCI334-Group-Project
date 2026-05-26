@@ -2,11 +2,10 @@ package com.example.adminstats.controller;
 
 import java.time.LocalDate;
 
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.example.adminstats.service.AnalyticsService;
@@ -21,21 +20,19 @@ public class AdminController {
     public AdminController(AnalyticsService analyticsService){
         this.analyticsService = analyticsService;
     }
-    // returns all admin statistical information for specified date
-    @GetMapping(value = "/{summary_date}", produces = MediaType.TEXT_PLAIN_VALUE)
-    public ResponseEntity<String> getSummary(@RequestParam LocalDate date){
+    @GetMapping("/{date}")
+    public ResponseEntity<Summary> getSummary(@PathVariable LocalDate date){
         try {
             Summary summary = analyticsService.getSummary(date);
-            return ResponseEntity.ok(summary.toString());
+            return ResponseEntity.ok(summary);
         } catch (RuntimeException e) {
-            return ResponseEntity.status(404).body(e.getMessage());
+            return ResponseEntity.notFound().build();
         }
     }
-    // returns all admin statistical information for latest date available
-    @GetMapping(value = "/latest", produces = MediaType.TEXT_PLAIN_VALUE)
-    public String getLatest(){
-        Summary summary = analyticsService.getLatest();
-        return summary.toString();
+
+    @GetMapping("/latest")
+    public Summary getLatest(){
+        return analyticsService.getLatest();
     }
     
 }

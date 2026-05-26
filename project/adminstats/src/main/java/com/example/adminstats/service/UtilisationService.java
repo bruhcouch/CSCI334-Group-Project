@@ -14,7 +14,6 @@ public class UtilisationService {
         int[] occupancy_history = snapshot.getOccupancy();
         int end = 24;
 
-        // condition against counting undefined occupancies (-1) in the utilisation
         for(int i = 0; i <= end-1; i++){
             if(occupancy_history[i] == -1){
                 end = i-1;

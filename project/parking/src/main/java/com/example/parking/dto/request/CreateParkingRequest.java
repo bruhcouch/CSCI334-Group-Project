@@ -12,6 +12,8 @@ public class CreateParkingRequest {
 
     private String vehicle;
 
+    private String mobilityParkingPermitNumber;
+
     private LocalDateTime startTime;
 
     private LocalDateTime endTime;
@@ -50,6 +52,14 @@ public class CreateParkingRequest {
 
     public void setVehicle(String vehicle) {
         this.vehicle = vehicle;
+    }
+
+    public String getMobilityParkingPermitNumber() {
+        return mobilityParkingPermitNumber;
+    }
+
+    public void setMobilityParkingPermitNumber(String mobilityParkingPermitNumber) {
+        this.mobilityParkingPermitNumber = mobilityParkingPermitNumber;
     }
 
     public LocalDateTime getStartTime() {

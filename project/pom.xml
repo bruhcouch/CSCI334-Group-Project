@@ -89,6 +89,9 @@
 		<module>accounts</module>
 		<module>spotter</module>
 		<module>adminstats</module>
+		<module>parking</module>
+		<module>occupancy</module>
+		<module>api-gateway</module>
 	</modules>
 
 </project>

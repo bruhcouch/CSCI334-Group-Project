@@ -65,6 +65,31 @@ if errorlevel 1 (
 
 (
     echo @echo off
+    echo title UOW Parking
+    echo cd /d "%PROJECT%\parking"
+    echo set "SPOTTER_SERVICE_URL=http://localhost:8085/api/spotter"
+    echo call mvn.cmd spring-boot:run
+    echo pause
+) > "%RUNNERS%\parking.bat"
+
+(
+    echo @echo off
+    echo title UOW Occupancy
+    echo cd /d "%PROJECT%\occupancy"
+    echo call mvn.cmd spring-boot:run
+    echo pause
+) > "%RUNNERS%\occupancy.bat"
+
+(
+    echo @echo off
+    echo title UOW Admin Stats
+    echo cd /d "%PROJECT%\adminstats"
+    echo call mvn.cmd spring-boot:run
+    echo pause
+) > "%RUNNERS%\adminstats.bat"
+
+(
+    echo @echo off
     echo title UOW Frontend
     echo cd /d "%FRONTEND%"
     echo set "NEXT_PUBLIC_API_URL=http://localhost:8089"
@@ -88,6 +113,33 @@ echo Waiting for Spotter on http://localhost:8085 ...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$deadline=(Get-Date).AddSeconds(90); do { try { $r=Invoke-WebRequest -UseBasicParsing -Uri 'http://localhost:8085/api/spotter/health' -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } } catch { Start-Sleep -Seconds 2 } } while ((Get-Date) -lt $deadline); exit 1"
 if errorlevel 1 (
     echo Spotter did not become ready. Check the UOW Spotter terminal for the error.
+    pause
+    exit /b 1
+)
+
+start "UOW Parking" "%RUNNERS%\parking.bat"
+echo Waiting for Parking on http://localhost:8082 ...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$deadline=(Get-Date).AddSeconds(90); do { try { $r=Invoke-WebRequest -UseBasicParsing -Uri 'http://localhost:8082/parking' -TimeoutSec 2; if ($r.StatusCode -lt 500) { exit 0 } } catch { Start-Sleep -Seconds 2 } } while ((Get-Date) -lt $deadline); exit 1"
+if errorlevel 1 (
+    echo Parking did not become ready. Check the UOW Parking terminal for the error.
+    pause
+    exit /b 1
+)
+
+start "UOW Occupancy" "%RUNNERS%\occupancy.bat"
+echo Waiting for Occupancy on http://localhost:8083 ...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$deadline=(Get-Date).AddSeconds(90); do { try { $r=Invoke-WebRequest -UseBasicParsing -Uri 'http://localhost:8083/occupancy/predictions' -TimeoutSec 2; if ($r.StatusCode -lt 500) { exit 0 } } catch { Start-Sleep -Seconds 2 } } while ((Get-Date) -lt $deadline); exit 1"
+if errorlevel 1 (
+    echo Occupancy did not become ready. Check the UOW Occupancy terminal for the error.
+    pause
+    exit /b 1
+)
+
+start "UOW Admin Stats" "%RUNNERS%\adminstats.bat"
+echo Waiting for Admin Stats on http://localhost:8086 ...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$deadline=(Get-Date).AddSeconds(90); do { try { $r=Invoke-WebRequest -UseBasicParsing -Uri 'http://localhost:8086/adminstats/latest' -TimeoutSec 2; if ($r.StatusCode -lt 500) { exit 0 } } catch { Start-Sleep -Seconds 2 } } while ((Get-Date) -lt $deadline); exit 1"
+if errorlevel 1 (
+    echo Admin Stats did not become ready. Check the UOW Admin Stats terminal for the error.
     pause
     exit /b 1
 )

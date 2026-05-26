@@ -31,8 +31,6 @@ public class AccountAdminController {
         this.accountAdminService = accountAdminService;
     }
 
-    // Create
-
     @PostMapping("/staff")
     public ResponseEntity<RegisterResponse> registerStaff(@RequestBody RegisterRequest registerRequest) {
         RegisterResult registerResult = accountAdminService.registerStaff(registerRequest);
@@ -61,8 +59,6 @@ public class AccountAdminController {
         return new ResponseEntity<>(registerResponse, HttpStatus.CREATED);
     }
 
-    // Read
-
     @GetMapping
     public List<AccountResponse> getAllAccounts() {
         return accountAdminService.getAllAccounts();
@@ -73,8 +69,6 @@ public class AccountAdminController {
         AccountResponse accountResponse = accountAdminService.getAccountById(accountId);
         return new ResponseEntity<>(accountResponse, HttpStatus.OK);
     }
-
-    // Update
 
     @PatchMapping("/{accountId}/enable")
     public ResponseEntity<Void> enableAccount(@PathVariable Long accountId) {
@@ -88,8 +82,6 @@ public class AccountAdminController {
         return new ResponseEntity<>(HttpStatus.NO_CONTENT);
     }
 
-    // Delete
-    
     @DeleteMapping("/{accountId}")
     public ResponseEntity<Void> deleteAccount(@PathVariable Long accountId) {
         accountAdminService.deleteAccount(accountId);

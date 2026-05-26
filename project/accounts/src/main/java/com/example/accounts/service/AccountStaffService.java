@@ -23,8 +23,6 @@ public class AccountStaffService {
         this.accountRepository = accountRepository;
     }
 
-    // Read
-    
     public List<AccountResponse> getAccounts(Boolean enabled, Role role, Subscription subscription, LocalDate startDate, LocalDate endDate) {
         LocalDateTime[] dateRange = DateRange.resolveRange(startDate, endDate);
 

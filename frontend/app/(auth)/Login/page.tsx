@@ -19,6 +19,9 @@ type AuthResponse = {
 
 type LoginMode = "user" | "admin";
 
+const defaultAdminEmail = "admin@uowmail.edu.au";
+const defaultAdminPassword = "test123";
+
 function clearJwtCookie() {
     document.cookie = "jwt=; Max-Age=0; path=/; SameSite=Lax";
 }
@@ -35,11 +38,11 @@ export default function LoginPage() {
         setError(null);
 
         if (mode === "admin" && !email && !password) {
-            setEmail("admin@example.com");
-            setPassword("changemepls123!");
+            setEmail(defaultAdminEmail);
+            setPassword(defaultAdminPassword);
         }
 
-        if (mode === "user" && email === "admin@example.com" && password === "changemepls123!") {
+        if (mode === "user" && email === defaultAdminEmail && password === defaultAdminPassword) {
             setEmail("");
             setPassword("");
         }

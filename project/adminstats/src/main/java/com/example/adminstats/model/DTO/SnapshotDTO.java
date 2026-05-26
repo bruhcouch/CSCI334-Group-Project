@@ -6,7 +6,7 @@ public class SnapshotDTO {
 
     private int lotId;
     private LocalDate date;
-    private int[] occupancy = new int[24]; // empty / not recorded hours become -1
+    private int[] occupancy = new int[24];
     private int spotsTotal;
 
     public SnapshotDTO() {}
@@ -28,4 +28,3 @@ public class SnapshotDTO {
     public int[] getOccupancy(){return this.occupancy;}
     public int getSpotsTotal(){return this.spotsTotal;}
 }
-

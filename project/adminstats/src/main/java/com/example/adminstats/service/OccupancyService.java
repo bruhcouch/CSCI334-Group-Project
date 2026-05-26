@@ -11,7 +11,6 @@ public class OccupancyService {
         int hour = 0;
         int occupancy = 0;
 
-        // finds the latest recording of occupancy
         for(int i = 0; i < 24; i++){
             if(occupancy_history[i] > 0){
                 hour = i+1;
