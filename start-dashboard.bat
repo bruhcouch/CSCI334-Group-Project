@@ -33,15 +33,19 @@ if errorlevel 1 (
     echo @echo off
     echo title UOW Kafka
     echo cd /d "%ROOT%"
-    echo docker compose up -d
-    echo docker compose ps
-    echo docker compose logs -f kafka
+    echo docker compose -p uow-parking up -d --remove-orphans
+    echo if errorlevel 1 echo Kafka could not start. Check Docker Desktop and whether port 9092 is already being used.
+    echo if errorlevel 1 pause
+    echo if errorlevel 1 exit /b 1
+    echo docker compose -p uow-parking ps
+    echo docker compose -p uow-parking logs -f kafka
 ) > "%RUNNERS%\kafka.bat"
 
 (
     echo @echo off
     echo title UOW Accounts
     echo cd /d "%PROJECT%\accounts"
+    echo set "APP_KAFKA_ENABLED=true"
     echo call mvn.cmd spring-boot:run
     echo pause
 ) > "%RUNNERS%\accounts.bat"
@@ -58,7 +62,7 @@ if errorlevel 1 (
     echo @echo off
     echo title UOW Spotter
     echo cd /d "%PROJECT%\spotter"
-    echo set "SPOTTER_KAFKA_ENABLED=false"
+    echo set "SPOTTER_KAFKA_ENABLED=true"
     echo call mvn.cmd spring-boot:run
     echo pause
 ) > "%RUNNERS%\spotter.bat"
@@ -68,6 +72,7 @@ if errorlevel 1 (
     echo title UOW Parking
     echo cd /d "%PROJECT%\parking"
     echo set "SPOTTER_SERVICE_URL=http://localhost:8085/api/spotter"
+    echo set "APP_KAFKA_ENABLED=true"
     echo call mvn.cmd spring-boot:run
     echo pause
 ) > "%RUNNERS%\parking.bat"
@@ -100,7 +105,13 @@ if errorlevel 1 (
 ) > "%RUNNERS%\frontend.bat"
 
 start "UOW Kafka" "%RUNNERS%\kafka.bat"
-timeout /t 12 /nobreak >nul
+echo Waiting for Kafka on localhost:9092 ...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$deadline=(Get-Date).AddSeconds(120); do { try { $client=[Net.Sockets.TcpClient]::new(); $async=$client.BeginConnect('127.0.0.1',9092,$null,$null); if ($async.AsyncWaitHandle.WaitOne(1000)) { $client.EndConnect($async); $client.Close(); exit 0 }; $client.Close() } catch { }; Start-Sleep -Seconds 2 } while ((Get-Date) -lt $deadline); exit 1"
+if errorlevel 1 (
+    echo Kafka did not become ready. Check the UOW Kafka terminal for the error.
+    pause
+    exit /b 1
+)
 
 start "UOW Accounts" "%RUNNERS%\accounts.bat"
 timeout /t 5 /nobreak >nul
@@ -153,9 +164,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-start "" "http://localhost:3000"
+start "" "http://localhost:3000/login"
 
 echo Dashboard startup launched.
 echo Leave the opened terminal windows running while you demo.
-echo Staff login: admin@example.com / changemepls123!
+echo Staff login: admin@uowmail.edu.au / test123
 pause
