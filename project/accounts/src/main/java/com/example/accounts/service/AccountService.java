@@ -140,6 +140,13 @@ public class AccountService {
         return new AccountResponse(account);
     }
 
+    public Subscription getSubscription(Long accountId) {
+        Account account = accountRepository.findById(accountId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found"));
+
+        return account.getSubscription() == null ? Subscription.FREE : account.getSubscription();
+    }
+
 
     public void update(UpdateRequest updateRequest, String email) {
         Account account = accountRepository.findByEmail(email)

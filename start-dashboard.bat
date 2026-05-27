@@ -72,6 +72,7 @@ if errorlevel 1 (
     echo title UOW Parking
     echo cd /d "%PROJECT%\parking"
     echo set "SPOTTER_SERVICE_URL=http://localhost:8085/api/spotter"
+    echo set "ACCOUNT_SERVICE_URL=http://localhost:8081/accounts"
     echo set "APP_KAFKA_ENABLED=true"
     echo call mvn.cmd spring-boot:run
     echo pause

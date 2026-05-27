@@ -25,10 +25,12 @@ public class ParkingService {
 
     private final ParkingRepository parkingRepository;
     private final SpotterClient spotterClient;
+    private final AccountClient accountClient;
 
-    public ParkingService(ParkingRepository parkingRepository, SpotterClient spotterClient) {
+    public ParkingService(ParkingRepository parkingRepository, SpotterClient spotterClient, AccountClient accountClient) {
         this.parkingRepository = parkingRepository;
         this.spotterClient = spotterClient;
+        this.accountClient = accountClient;
     }
 
     @Transactional
@@ -184,10 +186,17 @@ public class ParkingService {
         if (parking.getEndTime().isBefore(LocalDateTime.now())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Booking cannot end in the past");
         }
+        if (!isPremium(parking.getAccountId()) && parking.getStartTime().isBefore(LocalDateTime.now().plusHours(4))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Free accounts can only book spaces at least four hours in advance");
+        }
         if (parking.getCost() == null) {
             long minutes = Duration.between(parking.getStartTime(), parking.getEndTime()).toMinutes();
             parking.setCost(Math.max(2.50, Math.round((minutes / 60.0) * 2.50 * 100.0) / 100.0));
         }
+    }
+
+    private boolean isPremium(Long accountId) {
+        return "PREMIUM".equalsIgnoreCase(accountClient.getSubscription(accountId));
     }
 
     private void validateAccessiblePermit(Parking parking, SpotterSpaceResponse space) {

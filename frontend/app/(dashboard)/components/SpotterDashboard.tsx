@@ -6,6 +6,7 @@ import { fetcher, spotterFetcher } from "../../../lib/api";
 type DashboardMode = "user" | "staff";
 type Role = "USER" | "STAFF" | "ADMIN";
 type Subscription = "FREE" | "PREMIUM";
+type AlertMode = "any" | "lot" | "space";
 
 type Account = {
     id: number;
@@ -187,6 +188,35 @@ function defaultBookingEnd() {
     return toDateTimeInput(end);
 }
 
+function minimumFreeBookingStart() {
+    const start = new Date(Date.now() + 245 * 60 * 1000);
+    start.setSeconds(0, 0);
+    return toDateTimeInput(start);
+}
+
+function bookingEndFromStart(value: string) {
+    const start = new Date(value);
+
+    if (Number.isNaN(start.getTime())) {
+        return defaultBookingEnd();
+    }
+
+    start.setMinutes(start.getMinutes() + 60);
+    start.setSeconds(0, 0);
+    return toDateTimeInput(start);
+}
+
+function shiftDateTimeInput(value: string, days: number) {
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return value;
+    }
+
+    date.setDate(date.getDate() + days);
+    return toDateTimeInput(date);
+}
+
 function percent(value: number) {
     return `${Math.round(value)}%`;
 }
@@ -275,6 +305,7 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
     const [lots, setLots] = useState<string[]>([]);
     const [zoneOptions, setZoneOptions] = useState<ZoneSummary[]>([]);
     const [spaces, setSpaces] = useState<Space[]>([]);
+    const [allSpaces, setAllSpaces] = useState<Space[]>([]);
     const [events, setEvents] = useState<DetectionEvent[]>([]);
     const [selectedLot, setSelectedLot] = useState("all");
     const [selectedZone, setSelectedZone] = useState("all");
@@ -284,6 +315,16 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
     const [account, setAccount] = useState<Account | null>(null);
     const [accounts, setAccounts] = useState<Account[]>([]);
     const [accountError, setAccountError] = useState<string | null>(null);
+    const [routeReady, setRouteReady] = useState(false);
+    const [subscriptionBusy, setSubscriptionBusy] = useState<string | null>(null);
+    const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
+    const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
+    const [alertsEnabled, setAlertsEnabled] = useState(false);
+    const [alertMode, setAlertMode] = useState<AlertMode>("any");
+    const [alertLot, setAlertLot] = useState("");
+    const [alertSensor, setAlertSensor] = useState("");
+    const [showPremiumMembers, setShowPremiumMembers] = useState(false);
+    const [premiumModalOpen, setPremiumModalOpen] = useState(false);
     const [actionStatus, setActionStatus] = useState<string | null>(null);
     const [actionEvents, setActionEvents] = useState<DetectionEvent[]>([]);
     const [actionBusy, setActionBusy] = useState<string | null>(null);
@@ -298,12 +339,16 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
     const [bookingPermitNumber, setBookingPermitNumber] = useState("");
     const [bookingStart, setBookingStart] = useState(defaultBookingStart);
     const [bookingEnd, setBookingEnd] = useState(defaultBookingEnd);
+    const [recurringEnabled, setRecurringEnabled] = useState(false);
+    const [recurringWeeks, setRecurringWeeks] = useState(2);
     const [bookingBusy, setBookingBusy] = useState<string | null>(null);
     const [bookingStatus, setBookingStatus] = useState<string | null>(null);
     const [bookingError, setBookingError] = useState<string | null>(null);
     const [predictions, setPredictions] = useState<OccupancyPrediction[]>([]);
     const [predictionError, setPredictionError] = useState<string | null>(null);
     const [adminSummary, setAdminSummary] = useState<AdminSummary | null>(null);
+
+    const isPremium = account?.subscription === "PREMIUM";
 
     const loadSpotter = useCallback(async () => {
         try {
@@ -319,17 +364,18 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
                 summaryParams.set("zone", selectedZone);
             }
 
-            const spaceParams = new URLSearchParams(summaryParams);
+            const availableSpaceParams = new URLSearchParams(summaryParams);
 
             if (!isStaff) {
-                spaceParams.set("occupied", "false");
+                availableSpaceParams.set("occupied", "false");
             }
 
-            const [nextSummary, nextLots, nextZones, nextSpaces, nextEvents] = await Promise.all([
+            const [nextSummary, nextLots, nextZones, nextSpaces, nextAllSpaces, nextEvents] = await Promise.all([
                 spotterFetcher<SpotterSummary>(`/summary${toQuery(summaryParams)}`),
                 spotterFetcher<string[]>("/lots"),
                 spotterFetcher<ZoneSummary[]>(`/zones${toQuery(zoneParams)}`),
-                spotterFetcher<Space[]>(`/spaces${toQuery(spaceParams)}`),
+                spotterFetcher<Space[]>(`/spaces${toQuery(availableSpaceParams)}`),
+                spotterFetcher<Space[]>("/spaces"),
                 spotterFetcher<DetectionEvent[]>("/events"),
             ]);
 
@@ -337,6 +383,7 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
             setLots(nextLots);
             setZoneOptions(nextZones);
             setSpaces(nextSpaces);
+            setAllSpaces(nextAllSpaces);
             setEvents(nextEvents);
             setLastSync(new Date());
             setSpotterError(null);
@@ -362,8 +409,25 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
             try {
                 const profile = await fetcher<Account>("/api/accounts");
                 if (!cancelled) {
+                    if (isStaff && profile.role === "USER") {
+                        window.location.replace("/user");
+                        return;
+                    }
+
+                    if (!isStaff && (profile.role === "STAFF" || profile.role === "ADMIN")) {
+                        window.location.replace("/staff");
+                        return;
+                    }
+
                     setAccount(profile);
                     setAccountError(null);
+                    setRouteReady(true);
+                    if (!isStaff && profile.subscription !== "PREMIUM") {
+                        const nextStart = minimumFreeBookingStart();
+                        setRecurringEnabled(false);
+                        setBookingStart(nextStart);
+                        setBookingEnd(bookingEndFromStart(nextStart));
+                    }
                 }
             } catch (error) {
                 if (error instanceof Error && (error.name === "401" || error.name === "403")) {
@@ -374,6 +438,7 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
 
                 if (!cancelled) {
                     setAccountError(error instanceof Error ? error.message : "Account service is unavailable");
+                    setRouteReady(true);
                 }
             }
 
@@ -423,6 +488,12 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
 
         if (isStaff) {
             try {
+                setAccounts(await fetcher<Account[]>("/api/staff/accounts"));
+            } catch {
+                setAccounts([]);
+            }
+
+            try {
                 setAdminSummary(await fetcher<AdminSummary>("/api/adminstats/latest"));
             } catch {
                 setAdminSummary(null);
@@ -455,6 +526,9 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
     const visibleSpaces = (isStaff ? spaces : bookableSpaces).slice(0, isStaff ? 14 : 12);
     const recentEvents = events.slice(0, 8);
     const staffStats = useMemo(() => accountStats(accounts), [accounts]);
+    const premiumAccounts = useMemo(() => {
+        return accounts.filter((currentAccount) => currentAccount.subscription === "PREMIUM");
+    }, [accounts]);
     const pendingApprovals = useMemo(() => {
         return accounts.filter((staffAccount) => (
             (staffAccount.role === "ADMIN" || staffAccount.role === "STAFF")
@@ -476,6 +550,47 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
     const activeBookings = useMemo(() => {
         return bookings.filter((booking) => booking.status === "ACTIVE" || booking.status === "RESERVED");
     }, [bookings]);
+    const alertEligibleSpaces = useMemo(() => {
+        return accessibleEligible ? allSpaces : allSpaces.filter((space) => !space.disabilityPermitRequired);
+    }, [accessibleEligible, allSpaces]);
+    const alertLotOptions = useMemo(() => {
+        return Array.from(new Set(alertEligibleSpaces.map((space) => space.lotName))).sort();
+    }, [alertEligibleSpaces]);
+    const alertSpaceOptions = useMemo(() => {
+        return [...alertEligibleSpaces].sort((first, second) => (
+            first.lotName.localeCompare(second.lotName)
+            || first.zone.localeCompare(second.zone)
+            || first.bayNumber.localeCompare(second.bayNumber)
+        ));
+    }, [alertEligibleSpaces]);
+    const openSpaceAlerts = useMemo(() => {
+        if (!alertsEnabled || !isPremium || isStaff) {
+            return [];
+        }
+
+        return events
+            .filter((event) => {
+                if (event.occupied) {
+                    return false;
+                }
+
+                if (!accessibleEligible && event.zone === "Accessible") {
+                    return false;
+                }
+
+                if (alertMode === "lot") {
+                    return Boolean(alertLot) && event.lotName === alertLot;
+                }
+
+                if (alertMode === "space") {
+                    return Boolean(alertSensor) && event.sensorId === alertSensor;
+                }
+
+                return true;
+            })
+            .slice(0, 5)
+            .map((event) => `${event.lotName} ${zoneName(event.zone)} spot ${event.bayNumber} opened at ${formatTime(event.detectedAt)}`);
+    }, [accessibleEligible, alertLot, alertMode, alertSensor, alertsEnabled, events, isPremium, isStaff]);
     const selectedBookingSpace = useMemo(() => {
         const sensorId = bookingSensor || bookableSpaces.find((space) => !space.occupied)?.sensorId || "";
         return bookableSpaces.find((space) => space.sensorId === sensorId);
@@ -521,6 +636,61 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
         }
     }
 
+    function updateAlertMode(nextMode: AlertMode) {
+        setAlertMode(nextMode);
+
+        if (nextMode === "lot" && !alertLot && alertLotOptions[0]) {
+            setAlertLot(alertLotOptions[0]);
+        }
+
+        if (nextMode === "space" && !alertSensor && alertSpaceOptions[0]) {
+            setAlertSensor(alertSpaceOptions[0].sensorId);
+        }
+    }
+
+    async function upgradeSubscription() {
+        setSubscriptionBusy("upgrade");
+        setSubscriptionStatus(null);
+        setSubscriptionError(null);
+
+        try {
+            await fetcher<void>("/api/accounts/subscription/upgrade", {
+                method: "PATCH",
+            });
+            setAccount((currentAccount) => currentAccount ? { ...currentAccount, subscription: "PREMIUM" } : currentAccount);
+            setSubscriptionStatus("Premium is active");
+            setBookingStart(defaultBookingStart());
+            setBookingEnd(defaultBookingEnd());
+        } catch (error) {
+            setSubscriptionError(error instanceof Error ? error.message : "Premium activation failed");
+        } finally {
+            setSubscriptionBusy(null);
+        }
+    }
+
+    async function downgradeSubscription() {
+        setSubscriptionBusy("downgrade");
+        setSubscriptionStatus(null);
+        setSubscriptionError(null);
+
+        try {
+            await fetcher<void>("/api/accounts/subscription/downgrade", {
+                method: "PATCH",
+            });
+            const nextStart = minimumFreeBookingStart();
+            setAccount((currentAccount) => currentAccount ? { ...currentAccount, subscription: "FREE" } : currentAccount);
+            setSubscriptionStatus("Premium cancelled");
+            setAlertsEnabled(false);
+            setRecurringEnabled(false);
+            setBookingStart(nextStart);
+            setBookingEnd(bookingEndFromStart(nextStart));
+        } catch (error) {
+            setSubscriptionError(error instanceof Error ? error.message : "Premium cancellation failed");
+        } finally {
+            setSubscriptionBusy(null);
+        }
+    }
+
     async function createBooking(event: FormEvent) {
         event.preventDefault();
 
@@ -555,29 +725,59 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
             return;
         }
 
+        const startDate = new Date(bookingStart);
+        const endDate = new Date(bookingEnd);
+
+        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || !startDate.getTime() || !endDate.getTime()) {
+            setBookingError("Choose a valid booking time");
+            return;
+        }
+
+        if (!startDate || !endDate || startDate >= endDate) {
+            setBookingError("End time must be after the start time");
+            return;
+        }
+
+        if (!isPremium && startDate.getTime() < Date.now() + 4 * 60 * 60 * 1000) {
+            setBookingError("Free accounts can only book at least four hours in advance. Premium members can book sooner.");
+            return;
+        }
+
         setBookingBusy("create");
         setBookingStatus(null);
         setBookingError(null);
 
         try {
-            const booking = await fetcher<ParkingBooking>("/api/parking", {
-                method: "POST",
-                body: JSON.stringify({
-                    accountId: account.id,
-                    parkingLot: space.lotName,
-                    parkingSpace: sensorId,
-                    vehicle: registration,
-                    mobilityParkingPermitNumber: permitNumber || undefined,
-                    startTime: bookingStart,
-                    endTime: bookingEnd,
-                }),
-            });
-            setBookingStatus(`${bookingBayLabel(booking)} booked`);
+            const bookingCount = isPremium && recurringEnabled ? recurringWeeks : 1;
+            const createdBookings: ParkingBooking[] = [];
+
+            for (let index = 0; index < bookingCount; index += 1) {
+                const booking = await fetcher<ParkingBooking>("/api/parking", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        accountId: account.id,
+                        parkingLot: space.lotName,
+                        parkingSpace: sensorId,
+                        vehicle: registration,
+                        mobilityParkingPermitNumber: permitNumber || undefined,
+                        startTime: shiftDateTimeInput(bookingStart, index * 7),
+                        endTime: shiftDateTimeInput(bookingEnd, index * 7),
+                    }),
+                });
+                createdBookings.push(booking);
+            }
+
+            setBookingStatus(
+                createdBookings.length === 1
+                    ? `${bookingBayLabel(createdBookings[0])} booked`
+                    : `${createdBookings.length} weekly bookings created`
+            );
             setBookingSensor("");
             setBookingRegistration("");
             setBookingPermitNumber("");
-            setBookingStart(defaultBookingStart());
-            setBookingEnd(defaultBookingEnd());
+            const nextStart = isPremium ? defaultBookingStart() : minimumFreeBookingStart();
+            setBookingStart(nextStart);
+            setBookingEnd(isPremium ? defaultBookingEnd() : bookingEndFromStart(nextStart));
             await Promise.all([loadProjectData(), loadSpotter()]);
         } catch (error) {
             setBookingError(error instanceof Error ? error.message : "Booking failed");
@@ -698,6 +898,21 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
         }
     }
 
+    if (!routeReady && !accountError) {
+        return (
+            <div className="min-h-screen bg-[#f7f7f4] px-4 py-10 text-slate-950">
+                <main className="mx-auto w-full max-w-7xl">
+                    <section className="rounded-lg border border-stone-300 bg-white p-5 shadow-sm">
+                        <p className="text-sm font-semibold uppercase tracking-normal text-teal-700">
+                            {isStaff ? "Staff dashboard" : "User dashboard"}
+                        </p>
+                        <h1 className="mt-2 text-2xl font-semibold tracking-normal text-slate-950">Checking account access</h1>
+                    </section>
+                </main>
+            </div>
+        );
+    }
+
     return (
         <div className="min-h-screen bg-[#f7f7f4] text-slate-950">
             <main className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
@@ -716,6 +931,32 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
                             </span>
                             <span>Last sync {formatTime(lastSync)}</span>
                             {account && <span>{account.username} - {account.role}</span>}
+                            {isStaff && (
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPremiumMembers(true)}
+                                    className="rounded-md border border-amber-300 bg-amber-50 px-3 py-1 font-medium text-amber-900 transition hover:bg-amber-100"
+                                >
+                                    Premium members ({staffStats.premium})
+                                </button>
+                            )}
+                            {!isStaff && account && (
+                                <button
+                                    type="button"
+                                    onClick={() => setPremiumModalOpen(true)}
+                                    className="rounded-md border border-amber-300 bg-amber-50 px-3 py-1 font-medium text-amber-900 transition hover:bg-amber-100"
+                                >
+                                    {isPremium ? "Manage Premium" : "Get Premium"}
+                                </button>
+                            )}
+                            {!isStaff && isPremium && (
+                                <span
+                                    title="Premium member"
+                                    className="inline-flex h-7 min-w-7 items-center justify-center rounded-md border border-amber-300 bg-amber-100 px-2 text-xs font-bold text-amber-900"
+                                >
+                                    P+
+                                </span>
+                            )}
                             <button
                                 type="button"
                                 onClick={logout}
@@ -781,6 +1022,14 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
                                                 setBookingSensor("");
                                             }
 
+                                            const selectedAlertSpace = allSpaces.find((space) => space.sensorId === alertSensor);
+                                            if (selectedAlertSpace?.disabilityPermitRequired) {
+                                                setAlertSensor("");
+                                                if (alertMode === "space") {
+                                                    setAlertMode("any");
+                                                }
+                                            }
+
                                             setBookingPermitNumber("");
                                         }
                                     }}
@@ -792,10 +1041,42 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
                     </div>
                 </header>
 
-                {(spotterError || accountError || bookingError || predictionError) && (
+                {!isStaff && account && premiumModalOpen && (
+                    <PremiumModal
+                        account={account}
+                        isPremium={isPremium}
+                        busy={subscriptionBusy}
+                        status={subscriptionStatus}
+                        alertsEnabled={alertsEnabled}
+                        alertMode={alertMode}
+                        alertLot={alertLot}
+                        alertSensor={alertSensor}
+                        alertLots={alertLotOptions}
+                        alertSpaces={alertSpaceOptions}
+                        accessibleEligible={accessibleEligible}
+                        alerts={openSpaceAlerts}
+                        onAlertsChange={setAlertsEnabled}
+                        onAlertModeChange={updateAlertMode}
+                        onAlertLotChange={setAlertLot}
+                        onAlertSensorChange={setAlertSensor}
+                        onUpgrade={upgradeSubscription}
+                        onDowngrade={downgradeSubscription}
+                        onClose={() => setPremiumModalOpen(false)}
+                    />
+                )}
+
+                {isStaff && showPremiumMembers && (
+                    <PremiumMembersModal
+                        accounts={premiumAccounts}
+                        onClose={() => setShowPremiumMembers(false)}
+                    />
+                )}
+
+                {(spotterError || accountError || subscriptionError || bookingError || predictionError) && (
                     <section className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                         {spotterError && <p>Parking availability: {spotterError}</p>}
                         {accountError && <p>Accounts: {accountError}</p>}
+                        {subscriptionError && <p>Premium: {subscriptionError}</p>}
                         {bookingError && <p>Bookings: {bookingError}</p>}
                         {predictionError && <p>Predictions: {predictionError}</p>}
                     </section>
@@ -849,6 +1130,9 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
                             showPermitNumber={accessibleEligible}
                             startTime={bookingStart}
                             endTime={bookingEnd}
+                            isPremium={isPremium}
+                            recurringEnabled={recurringEnabled}
+                            recurringWeeks={recurringWeeks}
                             busy={bookingBusy}
                             status={bookingStatus}
                             onSensorChange={setBookingSensor}
@@ -856,6 +1140,8 @@ export default function SpotterDashboard({ mode }: { mode: DashboardMode }) {
                             onPermitNumberChange={setBookingPermitNumber}
                             onStartChange={setBookingStart}
                             onEndChange={setBookingEnd}
+                            onRecurringEnabledChange={setRecurringEnabled}
+                            onRecurringWeeksChange={setRecurringWeeks}
                             onSubmit={createBooking}
                         />
                         <BookingList
@@ -984,6 +1270,248 @@ function RecommendationCard({ label, value, detail }: { label: string; value: st
     );
 }
 
+function PremiumModal({
+    account,
+    isPremium,
+    busy,
+    status,
+    alertsEnabled,
+    alertMode,
+    alertLot,
+    alertSensor,
+    alertLots,
+    alertSpaces,
+    accessibleEligible,
+    alerts,
+    onAlertsChange,
+    onAlertModeChange,
+    onAlertLotChange,
+    onAlertSensorChange,
+    onUpgrade,
+    onDowngrade,
+    onClose,
+}: {
+    account: Account;
+    isPremium: boolean;
+    busy: string | null;
+    status: string | null;
+    alertsEnabled: boolean;
+    alertMode: AlertMode;
+    alertLot: string;
+    alertSensor: string;
+    alertLots: string[];
+    alertSpaces: Space[];
+    accessibleEligible: boolean;
+    alerts: string[];
+    onAlertsChange: (value: boolean) => void;
+    onAlertModeChange: (value: AlertMode) => void;
+    onAlertLotChange: (value: string) => void;
+    onAlertSensorChange: (value: string) => void;
+    onUpgrade: () => Promise<void>;
+    onDowngrade: () => Promise<void>;
+    onClose: () => void;
+}) {
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-6">
+            <section role="dialog" aria-modal="true" className="max-h-[calc(100vh-3rem)] w-full max-w-4xl overflow-y-auto rounded-lg border border-stone-300 bg-white p-4 shadow-xl sm:p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <h2 className="text-lg font-semibold text-slate-950">Premium membership</h2>
+                            <span className={`rounded-md px-2 py-1 text-xs font-semibold ${isPremium ? "bg-teal-50 text-teal-800" : "bg-stone-100 text-slate-600"}`}>
+                                {isPremium ? "Premium active" : "Free plan"}
+                            </span>
+                        </div>
+                        <p className="mt-1 text-sm text-slate-600">
+                            {isPremium ? "Your Premium benefits are ready to use." : "Upgrade your parking account for more flexible bookings and alerts."}
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="h-9 rounded-md border border-stone-300 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-stone-100"
+                    >
+                        Close
+                    </button>
+                </div>
+
+                <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
+                    <div>
+                        <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-3">
+                            <p className="rounded-md border border-stone-200 p-3">Last-minute bookings</p>
+                            <p className="rounded-md border border-stone-200 p-3">Recurring bookings</p>
+                            <p className="rounded-md border border-stone-200 p-3">Bay opening alerts</p>
+                        </div>
+                        <p className="mt-3 text-sm text-slate-600">
+                            {isPremium ? "You can book available bays immediately, repeat bookings weekly, and turn on opening alerts below." : "Free accounts can still book parking, but bookings must start at least four hours from now."}
+                        </p>
+                    </div>
+
+                    <div className="rounded-md border border-stone-200 p-3">
+                        <p className="text-sm font-semibold text-slate-950">{isPremium ? "Membership" : "Demo checkout"}</p>
+                        <p className="mt-1 text-xs text-slate-600">{account.email}</p>
+                        {!isPremium && (
+                            <div className="mt-3 grid gap-2">
+                                <input
+                                    value="4242 4242 4242 4242"
+                                    readOnly
+                                    className="h-9 rounded-md border border-stone-300 bg-stone-50 px-3 text-sm text-slate-700"
+                                />
+                                <div className="grid grid-cols-2 gap-2">
+                                    <input value="12/29" readOnly className="h-9 rounded-md border border-stone-300 bg-stone-50 px-3 text-sm text-slate-700" />
+                                    <input value="123" readOnly className="h-9 rounded-md border border-stone-300 bg-stone-50 px-3 text-sm text-slate-700" />
+                                </div>
+                            </div>
+                        )}
+                        <button
+                            type="button"
+                            onClick={() => void (isPremium ? onDowngrade() : onUpgrade())}
+                            disabled={Boolean(busy)}
+                            className={`mt-3 h-10 w-full rounded-md px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${isPremium ? "border border-stone-300 bg-white text-slate-700 hover:bg-stone-100" : "bg-teal-700 text-white hover:bg-teal-800"}`}
+                        >
+                            {busy ? "Updating" : isPremium ? "Cancel Premium" : "Activate Premium"}
+                        </button>
+                        {status && <p className="mt-2 text-sm font-medium text-slate-700">{status}</p>}
+                    </div>
+                </div>
+
+                {isPremium && (
+                    <div className="mt-4 rounded-md border border-teal-100 bg-teal-50 p-3">
+                        <label className="flex items-center gap-2 text-sm font-medium text-teal-900">
+                            <input
+                                type="checkbox"
+                                checked={alertsEnabled}
+                                onChange={(event) => onAlertsChange(event.target.checked)}
+                                className="h-4 w-4 rounded border-teal-300 text-teal-700 focus:ring-teal-600"
+                            />
+                            Alert me when a bay opens
+                        </label>
+                        {alertsEnabled && (
+                            <div className="mt-3 grid gap-3 md:grid-cols-3">
+                                <label className="flex min-w-0 flex-col gap-1 text-sm font-medium text-teal-950">
+                                    Alert type
+                                    <select
+                                        value={alertMode}
+                                        onChange={(event) => onAlertModeChange(event.target.value as AlertMode)}
+                                        className="h-10 rounded-md border border-teal-200 bg-white px-3 text-sm text-slate-950 outline-none focus:border-teal-600"
+                                    >
+                                        <option value="any">Any open spot</option>
+                                        <option value="lot">Any spot in a car park</option>
+                                        <option value="space">A specific spot</option>
+                                    </select>
+                                </label>
+
+                                {alertMode === "lot" && (
+                                    <label className="flex min-w-0 flex-col gap-1 text-sm font-medium text-teal-950">
+                                        Car park
+                                        <select
+                                            value={alertLot}
+                                            onChange={(event) => onAlertLotChange(event.target.value)}
+                                            className="h-10 rounded-md border border-teal-200 bg-white px-3 text-sm text-slate-950 outline-none focus:border-teal-600"
+                                        >
+                                            {alertLots.length === 0 && <option value="">No car parks available</option>}
+                                            {alertLots.map((lot) => (
+                                                <option key={lot} value={lot}>
+                                                    {lot}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </label>
+                                )}
+
+                                {alertMode === "space" && (
+                                    <label className="flex min-w-0 flex-col gap-1 text-sm font-medium text-teal-950 md:col-span-2">
+                                        Parking spot
+                                        <select
+                                            value={alertSensor}
+                                            onChange={(event) => onAlertSensorChange(event.target.value)}
+                                            className="h-10 rounded-md border border-teal-200 bg-white px-3 text-sm text-slate-950 outline-none focus:border-teal-600"
+                                        >
+                                            {alertSpaces.length === 0 && <option value="">No spots available</option>}
+                                            {alertSpaces.map((space) => (
+                                                <option key={space.sensorId} value={space.sensorId}>
+                                                    {space.displayName}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </label>
+                                )}
+                            </div>
+                        )}
+                        {alertsEnabled && !accessibleEligible && (
+                            <p className="mt-2 text-xs text-teal-800">
+                                Accessible bay alerts appear when accessible parking eligibility is ticked.
+                            </p>
+                        )}
+                        {alertsEnabled && (
+                            <div className="mt-3 space-y-2 text-sm text-teal-950">
+                                {alerts.length === 0 && <p>No opening alerts yet.</p>}
+                                {alerts.map((alert) => (
+                                    <p key={alert} className="rounded-md bg-white px-3 py-2">
+                                        {alert}
+                                    </p>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+            </section>
+        </div>
+    );
+}
+
+function PremiumMembersModal({
+    accounts,
+    onClose,
+}: {
+    accounts: Account[];
+    onClose: () => void;
+}) {
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-6">
+            <section role="dialog" aria-modal="true" className="max-h-[calc(100vh-3rem)] w-full max-w-3xl overflow-y-auto rounded-lg border border-stone-300 bg-white p-4 shadow-xl sm:p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <h2 className="text-lg font-semibold text-slate-950">Premium members</h2>
+                        <p className="text-sm text-slate-600">{accounts.length} active premium account{accounts.length === 1 ? "" : "s"}</p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="h-9 rounded-md border border-stone-300 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-stone-100"
+                    >
+                        Close
+                    </button>
+                </div>
+
+                <div className="mt-3 divide-y divide-stone-200">
+                    {accounts.length === 0 && <p className="py-6 text-sm text-slate-600">No premium members yet.</p>}
+                    {accounts.map((premiumAccount) => (
+                        <div key={premiumAccount.id} className="grid gap-2 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                            <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <p className="truncate text-sm font-semibold text-slate-950">{premiumAccount.username}</p>
+                                    <span className="rounded-md bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-900">Premium</span>
+                                </div>
+                                <p className="truncate text-xs text-slate-600">{premiumAccount.email}</p>
+                                <p className="truncate text-xs text-slate-500">Account {premiumAccount.id}</p>
+                            </div>
+                            <div className="flex flex-wrap gap-2 sm:justify-end">
+                                <span className="rounded-md bg-teal-50 px-2 py-1 text-xs font-semibold text-teal-800">
+                                    {premiumAccount.role}
+                                </span>
+                                <span className={`rounded-md px-2 py-1 text-xs font-semibold ${premiumAccount.enabled ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-800"}`}>
+                                    {premiumAccount.enabled ? "active" : "disabled"}
+                                </span>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </section>
+        </div>
+    );
+}
+
 function BookingPanel({
     spaces,
     bookingSensor,
@@ -992,6 +1520,9 @@ function BookingPanel({
     showPermitNumber,
     startTime,
     endTime,
+    isPremium,
+    recurringEnabled,
+    recurringWeeks,
     busy,
     status,
     onSensorChange,
@@ -999,6 +1530,8 @@ function BookingPanel({
     onPermitNumberChange,
     onStartChange,
     onEndChange,
+    onRecurringEnabledChange,
+    onRecurringWeeksChange,
     onSubmit,
 }: {
     spaces: Space[];
@@ -1008,6 +1541,9 @@ function BookingPanel({
     showPermitNumber: boolean;
     startTime: string;
     endTime: string;
+    isPremium: boolean;
+    recurringEnabled: boolean;
+    recurringWeeks: number;
     busy: string | null;
     status: string | null;
     onSensorChange: (value: string) => void;
@@ -1015,6 +1551,8 @@ function BookingPanel({
     onPermitNumberChange: (value: string) => void;
     onStartChange: (value: string) => void;
     onEndChange: (value: string) => void;
+    onRecurringEnabledChange: (value: boolean) => void;
+    onRecurringWeeksChange: (value: number) => void;
     onSubmit: (event: FormEvent) => Promise<void>;
 }) {
     return (
@@ -1026,6 +1564,10 @@ function BookingPanel({
                 </div>
                 <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{spaces.length}</span>
             </div>
+
+            <p className="mt-3 rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-slate-700">
+                {isPremium ? "Premium members can book any available time and repeat bookings weekly." : "Free bookings must start at least four hours from now."}
+            </p>
 
             <form onSubmit={(event) => void onSubmit(event)} className="mt-4 grid gap-3">
                 <label className="flex min-w-0 flex-col gap-1 text-sm font-medium text-slate-700">
@@ -1088,6 +1630,30 @@ function BookingPanel({
                             required
                         />
                     </label>
+                </div>
+
+                <div className="grid gap-3 rounded-md border border-stone-200 p-3 sm:grid-cols-[minmax(0,1fr)_160px] sm:items-center">
+                    <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                        <input
+                            type="checkbox"
+                            checked={recurringEnabled}
+                            onChange={(event) => onRecurringEnabledChange(event.target.checked)}
+                            disabled={!isPremium}
+                            className="h-4 w-4 rounded border-stone-300 text-teal-700 focus:ring-teal-600 disabled:cursor-not-allowed disabled:opacity-50"
+                        />
+                        Repeat this booking weekly
+                    </label>
+                    <select
+                        value={recurringWeeks}
+                        onChange={(event) => onRecurringWeeksChange(Number(event.target.value))}
+                        disabled={!isPremium || !recurringEnabled}
+                        className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        <option value={2}>2 weeks</option>
+                        <option value={3}>3 weeks</option>
+                        <option value={4}>4 weeks</option>
+                        <option value={5}>5 weeks</option>
+                    </select>
                 </div>
 
                 <button
